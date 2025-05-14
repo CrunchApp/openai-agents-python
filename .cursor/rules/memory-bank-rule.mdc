@@ -1,0 +1,42 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+The memory-bank folder is your persistent source of project context, documentation and guidelines. Follow these steps when executing any tasks:
+
+
+1. Pre-Task Check:
+   - Prior to writing or modifying any code, read all the memory-bank files to align with the project’s overall context.
+   - Use projectbrief.md and productContext.md to understand the project's purpose.
+   - Refer to systemPatterns.md and techContext.md to ensure adherence to technical and architectural guidelines.
+   - Check activeContext.md for the current state of development.
+
+2. During Development:
+   - Follow the documented guidelines without overriding decisions in projectbrief.md, systemPatterns.md, or techContext.md unless these files have been explicitly updated.
+   - As new insights or changes arise, immediately document them in activeContext.md.
+   - Record progress, milestones, and significant updates in progress.md.
+
+3. Post-Task Update:
+   - After completing a task or making major changes, re-read the memory bank to ensure consistency.
+   - Update the relevant markdown files to reflect the new state of the project and any changes made.
+   - Validate that all modifications align with the overall project context.
+
+4. Error Correction & Consistency:
+   - If you encounter inconsistencies or outdated information, update the appropriate memory-bank file promptly and note the correction.
+   - Continuously maintain an accurate and evolving representation of the project’s context by revisiting the memory bank regularly.
+
+5. Ongoing Reference:
+   - Throughout multi-file edits or new code additions, periodically refer back to the memory-bank files to ensure your work is in sync with established guidelines.
+   - If any conflicts or uncertainties arise between new changes and existing documentation, pause and consult the memory bank for clarification before proceeding.
+
+
+   memory-bank/
+├── @projectBrief.md      # High-level overview: goals, requirements, and key project info.
+├── @productContext.md    # The “why” behind the project: user needs, business context.
+├── @systemPatterns.md    # Architectural decisions, design patterns, and relationships.
+├── @techContext.md       # Technical stack details, dependencies, and environment setup.
+└── @progress.md          # Change tracking: completed work, milestones, and updates.
+
+
+----------------------------------------------------------

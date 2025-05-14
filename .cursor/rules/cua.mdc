@@ -1,0 +1,103 @@
+---
+description: 
+globs: agents/computer_use_agent.py, tools/computer_control_tools.py, tools/*_cua_*.py, workflows/*_cua_*.py
+alwaysApply: false
+---
+# Computer Use Agent (CUA) Rules: Autonomous X Agentic Unit
+
+# Description: Specific rules for developing, controlling, and securing Computer Use Agent (CUA) functionalities, including interactions with OpenAI's CUA tool and custom Playwright scripts.
+
+## 1. Core CUA Principles & Safety
+
+*   **Security First**: All CUA-related code generation **MUST** prioritize security above all else. CUA actions interact directly with computer environments and web UIs; therefore, the potential for unintended consequences or vulnerabilities is high.
+*   **Principle of Least Privilege**: The `ComputerUseAgent` and any scripts or tools it uses (e.g., Playwright scripts, OpenAI CUA tool calls) **MUST** operate with the minimum necessary permissions.
+*   **Explicit User Intent**: CUA actions that perform significant state changes (e.g., posting content, sending messages, modifying profiles, deleting data on X) **MUST** be traceable to an explicit user-defined goal or a task delegated with clear intent from the `OrchestratorAgent` or HIL approval. Avoid autonomous CUA actions based on vague interpretations.
+*   **Controlled Environment**:
+    *   OpenAI's CUA tool (if used via Responses API or `ComputerTool`) and custom Playwright scripts **SHOULD** execute within a controlled and sandboxed environment (e.g., a dedicated Docker container with specific browser versions, pre-configured display settings like 1024x768 for CUA, and restricted network/filesystem access).
+    *   The AI should assist in generating `Dockerfile` configurations for such environments if requested.
+*   **Idempotency (where possible)**: Design CUA tasks and actions to be idempotent where feasible, so re-running a failed or interrupted task does not cause unintended duplicate effects.
+
+## 2. Interacting with OpenAI's "Computer Use" Tool (`computer_use_preview`)
+
+*   **Access Method**: Primarily via the `ComputerTool` primitive if integrated into our forked OpenAI Agents SDK, or via direct calls to the OpenAI Responses API if using it as a standalone service. Code should be adaptable to either.
+*   **Prompt Engineering for CUA Model**:
+    *   Prompts sent to the CUA model **MUST** be clear, concise, and unambiguous.
+    *   Include the current state (e.g., "currently on the X profile settings page at URL ...") and the specific, atomic goal (e.g., "goal: click the 'Edit Profile' button").
+    *   Provide context from previous steps if it's a multi-step operation.
+    *   Screenshots sent to the CUA model **MUST** be clear and represent the relevant portion of the UI for the current action.
+*   **Action Execution (`tools/computer_control_tools.py`)**:
+    *   Functions in `computer_control_tools.py` will translate abstract CUA model responses (e.g., `click(x,y)`, `type("text")`, `scroll(x,y,scroll_x,scroll_y)`, `keypress("Enter")`) into concrete Playwright commands.
+    *   These functions **MUST** include robust error handling for Playwright actions (e.g., element not found, timeout).
+    *   Before executing actions like `type`, sensitive data (if any, though CUA should avoid direct handling) **MUST NOT** be logged directly.
+*   **Iterative Loop**: CUA operations involve a loop: Capture Screenshot -> Send to CUA Model (with prompt) -> Receive Action -> Execute Action -> Validate Outcome/Capture New Screenshot. Generated code for managing this loop must be robust.
+*   **Human Handoff for Sensitive CUA Tasks**: The CUA model (and by extension, our `ComputerUseAgent`) **MUST NOT** be prompted or expected to autonomously handle:
+    *   User logins (entering usernames/passwords directly).
+    *   Solving CAPTCHAs.
+    *   Entering payment information.
+    *   These situations **MUST** trigger a handoff to a human (HIL mechanism) or use specialized, secure pre-scripted Playwright flows for login if deemed safe and approved for specific, controlled scenarios (e.g., logging into our own test X account).
+
+## 3. Custom Playwright Scripts for GUI Automation (`tools/computer_control_tools.py` or specific task scripts)
+
+*   **Selector Strategy**:
+    *   Prioritize robust selectors: `data-testid` attributes (if X provides them consistently), ARIA roles/labels, or stable IDs.
+    *   Use CSS selectors or XPath expressions carefully. Prefer relative XPaths over absolute ones.
+    *   Avoid selectors based on highly volatile class names or DOM structure prone to frequent changes.
+    *   Consider using Playwright's features like text selectors or filtering by visibility where appropriate.
+*   **Waiting Mechanisms**:
+    *   **MUST** use Playwright's auto-waiting capabilities or explicit waits (`page.wait_for_selector`, `page.wait_for_function`, `page.wait_for_load_state`) before interacting with elements.
+    *   Avoid fixed `time.sleep()` calls for waiting for UI elements; they lead to flaky scripts.
+*   **Error Handling & Retries**:
+    *   Wrap Playwright actions in `try-except` blocks to catch common exceptions (`TimeoutError`, `NoSuchElementException` from Playwright's perspective).
+    *   Implement retry logic for transient issues (e.g., element not ready immediately) with a limited number of attempts and short delays.
+*   **Browser Context & Page Management**:
+    *   Use isolated browser contexts (`browser.new_context()`) for different tasks or user sessions to prevent cookie/storage interference.
+    *   Ensure pages and contexts are properly closed (`page.close()`, `context.close()`) to free up resources.
+*   **Mimicking Human Behavior (for reducing detection)**:
+    *   Introduce small, randomized delays between actions if automating public-facing interactions extensively.
+    *   Simulate realistic mouse movements or typing speeds if Playwright's default actions are too fast and trigger anti-bot measures (though often not needed for basic interactions).
+    *   Use proxy rotation and user-agent management if building CUA/GUI tools intended for high-volume interaction that might be flagged. This is an advanced topic for later phases.
+*   **Login & Session Management (for custom scripts)**:
+    *   Automating X login via Playwright is high-risk and prone to breakage. Prefer API-based authentication where possible.
+    *   If login automation is absolutely necessary (e.g., for a dedicated test account in a controlled CUA environment), store credentials securely (via `core/config.py`) and handle MFA if applicable. Be aware X may actively try to block scripted logins.
+    *   Saving and reusing browser authentication state (cookies) can be an alternative to re-logging in every time, but must be done securely.
+
+## 4. Project-Specific CUA Components & Extensions
+
+*   **Custom `AsyncComputer` Extensions**: If our forked SDK includes extensions or modifications to `AsyncComputer` or similar CUA primitives, the AI **MUST** use these project-specific versions and their defined APIs, not generic ones. Rule `Extending AsyncComputer methods in Agents SDK` from OpenAI Developer Community (Ref: Memory Bank) is relevant here.
+*   **Specialized CUA Tools**: If we develop specific CUA tools (e.g., `XProfileUpdaterCUATool`, `TweetComposerCUATool`), the AI **MUST** generate code that correctly prepares arguments for, invokes, and handles responses/exceptions from these project-defined tools.
+*   **Data Extraction via CUA**: When using CUA (OpenAI's or Playwright) to extract data from X UI:
+    *   Be specific about what data to extract.
+    *   Validate the extracted data's format and consistency.
+    *   Be aware that UI-scraped data is less reliable than API-retrieved data and prone to breakage if the UI changes.
+
+## 5. Filesystem and Network Access by CUA
+
+*   **Filesystem Access**:
+    *   CUA actions involving file reads/writes **MUST** be restricted to predefined, isolated "workspace" directories (e.g., `/cua_data/input/`, `/cua_data/output/`, `/tmp/cua_session_{id}/`).
+    *   Paths **MUST** be validated to prevent directory traversal attacks (e.g., `../../etc/passwd`). Do not allow absolute paths outside the designated workspace unless through a highly privileged, audited tool.
+    *   Downloading files via CUA **MUST** save to the designated workspace, and downloaded files **SHOULD NOT** be executed automatically.
+*   **Network Access**:
+    *   CUA-initiated network requests (e.g., Playwright navigating to URLs) **SHOULD** primarily target `https://x.com` or `https://twitter.com`.
+    *   Navigation to arbitrary external URLs based on dynamic input (e.g., from a tweet content) **MUST** be handled with extreme caution, potentially through a URL validation/blocklisting service or by requiring HIL approval.
+*   **Command Execution**:
+    *   Direct execution of shell commands by CUA scripts is **HIGHLY DISCOURAGED**.
+    *   If absolutely necessary (and approved by tech lead), commands **MUST** use `subprocess` module with `shell=False` and arguments passed as a list. All parts of the command derived from external input **MUST** be rigorously sanitized to prevent command injection.
+    *   Prefer creating dedicated Python tools for system interactions over generic shell command execution.
+
+## 6. Guardrails for CUA Actions
+
+*   Input guardrails (defined in OpenAI Agents SDK) **MUST** be applied to tasks delegated to the `ComputerUseAgent` to validate the intent and parameters.
+*   Output guardrails **MUST** be applied to actions proposed by the CUA model (before execution by Playwright) or critical data extracted by CUA before it's used by other agents.
+*   Examples:
+    *   Guardrail: "Prevent CUA from navigating to URLs not on an approved domain list unless explicitly part of a 'web search' task."
+    *   Guardrail: "Flag any CUA-generated text intended for posting on X if it contains blacklisted phrases or exceeds character limits."
+    *   The AI should assist in generating the logic for these guardrail functions if requested.
+
+## 7. Logging and Auditing for CUA
+
+*   All significant CUA actions (e.g., page navigation, element interaction, data input/extraction, OpenAI CUA tool calls) **MUST** be logged with detailed context.
+*   Screenshots taken for the CUA model, prompts sent, and actions received **SHOULD** be logged for debugging (in a secure, local manner, respecting data privacy if screenshots contain PII). Redact sensitive info from logs if necessary.
+*   Failed CUA actions and retry attempts **MUST** be logged with error details.
+
+
+*(Note to AI: CUA operations are powerful but carry risk. Always prioritize security, use project-specific CUA tools and patterns, and ensure actions are well-logged and adhere to defined guardrails. When in doubt about safety or best practice for a CUA task, ask for human clarification.)*

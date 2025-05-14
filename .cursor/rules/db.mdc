@@ -1,0 +1,111 @@
+---
+description: 
+globs: **/db_manager.py, **/models/*.py, agents/**/*_agent.py, tools/**/*_tools.py
+alwaysApply: false
+---
+# Database (DB) Rules: Autonomous X Agentic Unit
+
+# Description: Rules for SQLite database interactions, schema design, querying, and data integrity.
+
+## 1. General Database Principles
+
+*   **Database System**: SQLite (using Python's built-in `sqlite3` module).
+*   **Centralized Access**: All direct database interactions (SQL execution, connection management) **MUST** be encapsulated within the `core/db_manager.py` module. Other parts of the application (agents, tools) **MUST** use functions provided by `db_manager.py` and **MUST NOT** establish their own connections or execute raw SQL directly.
+*   **Simplicity**: Given the use of SQLite and no ORM, queries and schema definitions should prioritize clarity and directness.
+*   **Data Integrity**: Ensuring data consistency and accuracy is paramount.
+
+## 2. Schema Definition & Management (`core/db_manager.py` context)
+
+*   **Schema Definition**: Database schema (CREATE TABLE statements) **MUST** be defined within `core/db_manager.py` or in dedicated SQL script files loaded by `db_manager.py` during initial setup.
+*   **Table Naming Conventions**:
+    *   Use `plural_snake_case` for table names (e.g., `x_oauth_tokens`, `task_queues`, `human_review_items`).
+*   **Column Naming Conventions**:
+    *   Use `snake_case` for column names (e.g., `access_token`, `task_id`, `created_at`).
+    *   Primary Keys: `id` (INTEGER PRIMARY KEY AUTOINCREMENT) is preferred for auto-incrementing primary keys. For natural keys, use a descriptive name (e.g., `user_x_id` for X user IDs if they are primary keys).
+    *   Foreign Keys: `related_table_singular_name_id` (e.g., if `human_review_items` links to `task_queues`, the foreign key in `human_review_items` would be `task_queue_id`).
+*   **Data Types**:
+    *   Use appropriate SQLite data types: `TEXT`, `INTEGER`, `REAL`, `BLOB`, `NUMERIC`.
+    *   For timestamps, store as `TEXT` in ISO-8601 format (`YYYY-MM-DDTHH:MM:SS.sssZ`) or `INTEGER` (Unix timestamp). Be consistent. ISO-8601 TEXT is preferred for human readability in the DB.
+    *   For JSON-like data stored in a single column, use `TEXT` and ensure the application layer handles serialization (e.g., `json.dumps`) and deserialization (`json.loads`).
+*   **Constraints**:
+    *   **NOT NULL**: Apply `NOT NULL` constraints to all columns that must have a value.
+    *   **UNIQUE**: Apply `UNIQUE` constraints where appropriate (e.g., a username, an API key).
+    *   **PRIMARY KEY**: Every table **MUST** have a defined `PRIMARY KEY`.
+    *   **FOREIGN KEY**: Explicitly define `FOREIGN KEY` constraints with `ON DELETE` and `ON UPDATE` actions (e.g., `ON DELETE CASCADE`, `ON UPDATE NO ACTION`) to maintain referential integrity.
+    *   **CHECK**: Use `CHECK` constraints for simple column-level validation where possible (e.g., `status TEXT CHECK(status IN ('pending', 'processing', 'completed', 'failed'))`).
+*   **Default Values**: Specify `DEFAULT` values for columns where semantically appropriate to ensure data consistency upon insertion (e.g., `created_at TEXT DEFAULT CURRENT_TIMESTAMP`, `priority INTEGER DEFAULT 0`).
+*   **Indexes**: Create `INDEX`es on columns frequently used in `WHERE` clauses, `JOIN` conditions, or for `ORDER BY` operations to improve query performance. This includes foreign key columns.
+*   **Schema Migrations (Manual)**: Since we are not using an ORM with automated migration tools (like Alembic), any schema changes after initial deployment **MUST** be handled via carefully written SQL DDL scripts (`ALTER TABLE`, etc.) managed within `core/db_manager.py` or version-controlled SQL files. These scripts should be idempotent where possible. Comment schema change scripts thoroughly.
+
+## 3. Querying Patterns (`core/db_manager.py` context)
+
+*   **Parameterized Queries**: **ALL SQL queries that include variable data MUST use parameterized queries (placeholders, e.g., `?` in `sqlite3`) to prevent SQL injection vulnerabilities.** Never use string formatting (f-strings, `%s`) to construct SQL queries with user-provided or dynamic data.
+    *   Example: `cursor.execute("SELECT * FROM users WHERE username = ?", (username_variable,))`
+*   **Connection & Cursor Management**:
+    *   Use `with` statements for managing database connections and cursors to ensure they are properly closed.
+    *   Example:
+        ```python
+        import sqlite3
+        # In db_manager.py
+        def get_user(db_path: str, username: str):
+            conn = None # Initialize conn to None
+            try:
+                conn = sqlite3.connect(db_path)
+                conn.row_factory = sqlite3.Row # Optional: access columns by name
+                with conn: # Handles commit/rollback for transactions
+                    with conn.cursor() as cur:
+                        cur.execute("SELECT * FROM users WHERE username = ?", (username,))
+                        return cur.fetchone()
+            except sqlite3.Error as e:
+                # Log the error
+                print(f"Database error: {e}")
+                # Optionally re-raise a custom exception
+                raise # Or raise CustomDbError(e) from e
+            # 'finally' block is not strictly needed for closing 'conn' if 'with conn:' is used,
+            # but can be used if other cleanup is needed or if 'with conn' is not used.
+            # If 'with conn:' is not used, then:
+            # finally:
+            #     if conn:
+            #         conn.close()
+        ```
+*   **Transaction Control**:
+    *   For operations involving multiple DML statements (INSERT, UPDATE, DELETE) that must succeed or fail together, use explicit transaction control. `sqlite3` connections are in autocommit mode by default unless a transaction is started with `BEGIN` or DML statements are executed. Using the connection object as a context manager (`with conn:`) automatically handles `COMMIT` on success or `ROLLBACK` on exception.
+    *   If not using `with conn:`, explicitly call `conn.commit()` after successful DML operations or `conn.rollback()` upon error.
+*   **Fetching Data**:
+    *   Fetch only the columns you need (`SELECT col1, col2` instead of `SELECT *`) to reduce data transfer and processing, especially for tables with many columns or large `TEXT`/`BLOB` fields.
+    *   Use `fetchone()` when expecting a single row, `fetchall()` when expecting multiple rows, and `fetchmany(size)` for batch processing.
+*   **Error Handling**:
+    *   Catch `sqlite3.Error` (or more specific subclasses like `sqlite3.IntegrityError`, `sqlite3.OperationalError`) for database operations.
+    *   Log database errors with sufficient context.
+    *   Functions in `db_manager.py` should either handle these errors gracefully (e.g., return `None` or an empty list) or re-raise them as custom, project-specific database exceptions (defined in `core/exceptions.py`) for the calling code to handle.
+*   **Readability**: Write clear, well-formatted SQL queries. For complex queries, use comments within the SQL or in the Python code to explain the logic.
+
+## 4. Project-Specific Data Needs
+
+### 4.1. `x_oauth_tokens` Table
+*   **Purpose**: Store X API OAuth 2.0 access and refresh tokens.
+*   **Key Columns (Examples)**: `user_x_id TEXT PRIMARY KEY`, `access_token TEXT NOT NULL`, `refresh_token TEXT`, `expires_at TEXT NOT NULL`, `scopes TEXT`.
+*   **Security**: `access_token` and `refresh_token` **MUST** be encrypted before being stored in this table. The `core/oauth_manager.py` will handle encryption/decryption using the `cryptography` library and an encryption key sourced from environment variables. The AI **MUST NOT** generate code that stores these tokens in plaintext.
+
+### 4.2. `task_queue` Table
+*   **Purpose**: Manage tasks to be performed by agents.
+*   **Key Columns (Examples)**: `task_id INTEGER PRIMARY KEY AUTOINCREMENT`, `agent_name_assigned TEXT`, `task_type TEXT NOT NULL`, `payload TEXT` (JSON), `status TEXT NOT NULL DEFAULT 'pending'`, `priority INTEGER DEFAULT 0`, `scheduled_time TEXT`, `created_at TEXT DEFAULT CURRENT_TIMESTAMP`, `updated_at TEXT DEFAULT CURRENT_TIMESTAMP`, `attempts INTEGER DEFAULT 0`, `last_error TEXT`.
+*   The `payload` column will store task-specific data as a JSON string.
+
+### 4.3. `agent_state` Table
+*   **Purpose**: Store persistent key-value state for agents (e.g., `last_mention_processed_id`, `last_dm_checked_timestamp`).
+*   **Key Columns (Examples)**: `state_key TEXT PRIMARY KEY`, `state_value TEXT`, `last_updated TEXT DEFAULT CURRENT_TIMESTAMP`.
+
+### 4.4. `human_review_queue` Table
+*   **Purpose**: Log tasks requiring human intervention.
+*   **Key Columns (Examples)**: `review_id INTEGER PRIMARY KEY AUTOINCREMENT`, `task_queue_id INTEGER` (FOREIGN KEY to `task_queue.task_id`), `reason_for_review TEXT`, `data_for_review TEXT` (JSON), `status TEXT DEFAULT 'pending_review'`, `reviewer_notes TEXT`, `created_at TEXT DEFAULT CURRENT_TIMESTAMP`, `reviewed_at TEXT`.
+
+### 4.5. `content_log` Table (Optional, for audit/analytics)
+*   **Purpose**: Record details of content posted or significant interactions.
+*   **Key Columns (Examples)**: `log_id INTEGER PRIMARY KEY AUTOINCREMENT`, `timestamp TEXT DEFAULT CURRENT_TIMESTAMP`, `content_type TEXT`, `content_text TEXT`, `x_item_id TEXT`, `associated_user_x_id TEXT`, `status TEXT`.
+
+## 5. Data Validation
+*   While primary input validation should occur at workflow entry points or in agent logic, database constraints (`NOT NULL`, `UNIQUE`, `CHECK`, `FOREIGN KEY`) serve as a crucial last line of defense for data integrity. The AI should assist in defining these constraints when generating `CREATE TABLE` statements.
+
+
+*(Note to AI: When generating any code that interacts with the database, ensure it uses the `core/db_manager.py` module. For DDL, ensure all constraints and naming conventions are followed. For DML, always use parameterized queries and proper transaction/error handling.)*

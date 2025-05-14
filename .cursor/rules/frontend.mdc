@@ -1,0 +1,135 @@
+---
+description: 
+globs: frontend/**/*.tsx, frontend/**/*.jsx, frontend/**/*.vue, frontend/**/*.svelte, frontend/**/*.ts, frontend/**/*.js, frontend/**/*.css, frontend/**/*.scss
+alwaysApply: false
+---
+# Frontend Rules: Autonomous X Agentic Unit
+
+# Description: Rules for developing any frontend interface (e.g., for HIL, monitoring, task management), assuming React with TypeScript and Tailwind CSS as a baseline.
+
+## 1. General Frontend Principles
+
+*   **Purpose**: Any frontend developed for this project (e.g., for HIL task review, agent status monitoring, basic task configuration) **MUST** be simple, intuitive, and focused on utility. Avoid over-design.
+*   **Technology Baseline (Assumed for now, confirm if different)**:
+    *   Framework: React
+    *   Language: TypeScript (`.tsx` for components, `.ts` for logic)
+    *   Styling: Tailwind CSS
+    *   State Management: React Context API for simple cases; Zustand for more complex global state if needed.
+    *   API Interaction: `fetch` API or a lightweight library like `axios`.
+    *   Build Tool: Vite (or Create React App if legacy preference).
+*   **Accessibility (a11y)**: All UI components **MUST** be designed with accessibility in mind from the start. Adhere to WCAG 2.1 AA guidelines where feasible.
+
+## 2. Component Structure & Naming (React/TypeScript Focus)
+
+*   **Directory Structure**:
+    *   `frontend/src/components/` for reusable UI components.
+    *   `frontend/src/pages/` or `frontend/src/views/` for top-level page components.
+    *   `frontend/src/hooks/` for custom React hooks.
+    *   `frontend/src/contexts/` for React Context providers/consumers.
+    *   `frontend/src/services/` for API interaction logic.
+    *   `frontend/src/utils/` for general utility functions.
+    *   Component directories: `lowercase-kebab-case` (e.g., `frontend/src/components/task-card/`).
+    *   Component files: `PascalCase.tsx` (e.g., `TaskCard.tsx`).
+*   **Component Definition**:
+    *   Use functional components with React Hooks.
+    *   Define props interfaces/types using TypeScript at the top of the file.
+    *   Example:
+        ```typescript jsx
+        // frontend/src/components/common/Button.tsx
+        import React from 'react';
+
+        interface ButtonProps {
+          label: string;
+          onClick: () => void;
+          variant?: 'primary' | 'secondary' | 'danger';
+          disabled?: boolean;
+        }
+
+        const Button: React.FC<ButtonProps> = ({
+          label,
+          onClick,
+          variant = 'primary',
+          disabled = false,
+        }) => {
+          const baseStyles = "px-4 py-2 rounded font-semibold focus:outline-none focus:ring-2 focus:ring-opacity-50";
+          // Tailwind CSS classes based on variant and disabled state
+          // ... (logic for styling) ...
+          const variantStyles = variant === 'primary' ? 'bg-blue-500 hover:bg-blue-600 text-white' :
+                                variant === 'secondary' ? 'bg-gray-300 hover:bg-gray-400 text-black' :
+                                'bg-red-500 hover:bg-red-600 text-white';
+          const disabledStyles = disabled ? 'opacity-50 cursor-not-allowed' : '';
+
+          return (
+            <button
+              onClick={onClick}
+              disabled={disabled}
+              className={`${baseStyles} ${variantStyles} ${disabledStyles}`}
+              aria-disabled={disabled}
+            >
+              {label}
+            </button>
+          );
+        };
+
+        export default Button;
+        ```
+*   **Props**:
+    *   Define explicit TypeScript interfaces or types for component props.
+    *   Use `React.FC<PropsInterface>` for component type.
+    *   Provide default values for optional props where sensible.
+*   **State Management**:
+    *   Use `useState` for local component state.
+    *   Use `useReducer` for complex local state logic.
+    *   For global state (e.g., user authentication status, shared application settings), use React Context API (`createContext`, `useContext`) for simple needs. If state becomes complex across many unrelated components, consider Zustand.
+*   **Event Handlers**: Name event handlers `handleEventName` (e.g., `handleClick`, `handleSubmit`).
+*   **Exports**: Prefer named exports for components if they are part of a larger UI library within the project, but default exports are acceptable for page-level components or standalone simple components. Be consistent.
+
+## 3. Styling (Tailwind CSS Focus)
+
+*   **Primary Method**: Use Tailwind CSS utility classes directly in JSX for styling.
+*   **Custom CSS**: Avoid writing custom CSS files (`.css`, `.scss`) unless absolutely necessary for complex styles not achievable with Tailwind utilities (e.g., complex animations, highly specific pseudo-elements). If custom CSS is used, keep it co-located with the component or in a global `styles` directory if truly global.
+*   **Component-Based Styling**: If a component requires a complex combination of Tailwind classes, consider creating a local constant or function within the component file to build the `className` string for better readability.
+*   **Theming**: Configure Tailwind's `tailwind.config.js` to define project-specific theme colors, fonts, and spacing to ensure consistency.
+*   **Responsive Design**: Use Tailwind's responsive prefixes (e.g., `md:`, `lg:`) to implement responsive layouts.
+
+## 4. API Interaction (from Frontend)
+
+*   **Service Layer**: Encapsulate API call logic within functions in the `frontend/src/services/` directory (e.g., `apiService.ts`, `taskService.ts`). Components should call these service functions rather than making `fetch` calls directly.
+*   **Method**: Use the browser's `fetch` API or a lightweight library like `axios` (if added as a dependency) for making HTTP requests to the backend API (defined by `api.mdc`).
+*   **Request/Response Types**: Use TypeScript interfaces/types for API request payloads and expected response data structures to ensure type safety.
+*   **Error Handling**:
+    *   Service functions **MUST** handle API errors gracefully (e.g., check `response.ok`, parse error responses).
+    *   Translate API errors into user-friendly messages to be displayed in the UI.
+    *   Log technical error details to the console.
+    *   Consider a global error handling mechanism (e.g., a context provider) to display toast notifications or error modals for unhandled API errors.
+*   **Loading States**: UI components that trigger API calls **MUST** manage and display loading states appropriately (e.g., show a spinner, disable buttons) to provide user feedback.
+
+## 5. Accessibility (a11y) Specifics
+
+*   **Semantic HTML**: Use semantic HTML5 elements (`<nav>`, `<main>`, `<article>`, `<aside>`, `<button>`, etc.) wherever appropriate.
+*   **ARIA Attributes**: Use ARIA (Accessible Rich Internet Applications) attributes correctly to enhance accessibility for dynamic content and custom controls (e.g., `aria-label`, `aria-describedby`, `role`).
+*   **Keyboard Navigation**: All interactive elements (buttons, links, form inputs) **MUST** be navigable and operable using only the keyboard. Ensure logical focus order.
+*   **Focus Management**: Manage focus explicitly when UI changes dynamically (e.g., opening modals, showing/hiding content). Focus indicators **MUST** be clearly visible.
+*   **Images**: Images conveying information **MUST** have descriptive `alt` text. Decorative images **SHOULD** have an empty `alt=""`.
+*   **Forms**:
+    *   All form inputs **MUST** have associated `<label>` elements (use `htmlFor` attribute).
+    *   Provide clear validation messages for form errors, associated with the respective input fields using `aria-describedby` or similar.
+*   **Color Contrast**: Ensure sufficient color contrast between text and background to meet WCAG AA guidelines.
+
+## 6. Frontend Testing
+
+*   **Frameworks**: Consider `Jest` with `React Testing Library` for unit and integration testing of React components. For end-to-end testing of any critical UI flows, `Playwright` (which we also use for CUA) can be leveraged.
+*   **What to Test**:
+    *   Component rendering with different props.
+    *   User interactions (clicks, form submissions) and their effects.
+    *   Conditional rendering logic.
+    *   State updates.
+*   **Mocking**: Mock API service calls and external dependencies during component testing.
+
+## 7. Build & Development
+
+*   **Linter/Formatter**: Use ESLint with appropriate React/TypeScript plugins, and Prettier for code formatting if not solely relying on Ruff for everything. Ensure consistency with backend formatting tools where logical.
+*   **Development Server**: Use Vite's (or CRA's) development server for fast refresh and hot module replacement.
+
+
+*(Note to AI: If tasked with generating frontend code, adhere to these React, TypeScript, and Tailwind CSS conventions. Prioritize simplicity, utility, and accessibility. If a different frontend stack is chosen later, these rules will be updated.)*

@@ -143,3 +143,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 .aider*
+
+# Ignore data directory with database
+data/
+!data/.gitkeep

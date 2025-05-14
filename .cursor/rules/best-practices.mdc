@@ -1,0 +1,122 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+## 1. Coding Standards & Style
+
+### 1.1. Python Language Conventions
+*   **PEP 8 Adherence**: All Python code **MUST** strictly adhere to [PEP 8 -- Style Guide for Python Code](https://www.python.org/dev/peps/pep-0008/).
+*   **Python Version**: All Python code **MUST** be compatible with Python 3.9.x as specified in `techContext.md`. Do not use features from Python 3.10 or newer unless explicitly approved and the project's Python version is upgraded.
+*   **Type Hinting**:
+    *   All function signatures (including methods) **MUST** include type hints for all arguments and the return value, as per [PEP 484](https://www.python.org/dev/peps/pep-0484/).
+    *   Use type hints for variables where it enhances clarity, especially for complex data structures.
+    *   Use `from typing import ...` for all necessary types (e.g., `List`, `Dict`, `Optional`, `Any`, `Callable`, `Tuple`).
+*   **Imports**:
+    *   Imports **MUST** be organized as per PEP 8: standard library imports first, then related third-party imports, then local application/library specific imports, each group separated by a blank line.
+    *   Use absolute imports for project modules (e.g., `from core.config import settings` not `from ..config import settings`) where feasible to improve clarity. Relative imports are acceptable within the same sub-package.
+*   **Programming Paradigm**:
+    *   Strive for clarity and simplicity.
+    *   Use classes for representing agents, complex stateful entities, custom exceptions, and data structures (like Pydantic models if adopted).
+    *   Prefer functional approaches (e.g., pure functions, immutable data where practical) for data transformation, stateless utility functions, and tool implementations if it enhances readability and testability without overcomplicating.
+    *   Avoid overly complex class hierarchies. Composition is often preferred over deep inheritance.
+
+### 1.2. Naming Conventions
+*   **Modules/Files**: `snake_case.py` (e.g., `x_api_tools.py`).
+*   **Packages/Directories**: `snake_case_directory_names` (e.g., `x_agentic_unit/core/`).
+*   **Classes**: `PascalCase` (e.g., `OrchestratorAgent`, `XApiTool`).
+*   **Functions & Methods**: `snake_case` (e.g., `post_tweet`, `_handle_api_error`).
+*   **Variables & Attributes**: `snake_case` (e.g., `user_id`, `tweet_text`).
+*   **Constants**: `UPPER_SNAKE_CASE` (e.g., `MAX_RETRIES = 3`, `API_TIMEOUT = 30`).
+*   **Private/Internal Attributes/Methods**: Prefix with a single underscore `_` (e.g., `_internal_state`, `_private_method`). Avoid using double underscores (`__`) unless strictly for name mangling in classes.
+
+### 1.3. Code Formatting & Linting
+*   **Tool**: `Ruff` is the mandated linter and formatter for this project. All Python code **MUST** be compliant with the Ruff configuration defined in the project's `pyproject.toml`.
+*   **Line Length**: Maximum line length is 100 characters. Ruff will enforce this.
+*   **Automatic Formatting**: Developers should configure their IDEs (including Cursor) to format on save using Ruff, or run Ruff format before committing. AI-generated code should also adhere to this.
+
+### 1.4. Comments and Documentation
+*   **Docstrings**:
+    *   All public modules, classes, functions, and methods **MUST** have docstrings.
+    *   Use Google-style Python docstrings. Example:
+        ```python
+        def my_function(param1: str, param2: int) -> bool:
+            """Does something interesting.
+
+            Args:
+                param1: The first parameter, a string.
+                param2: The second parameter, an integer.
+
+            Returns:
+                True if successful, False otherwise.
+
+            Raises:
+                CustomError: If a specific error condition occurs.
+            """
+            # ...
+        ```
+    *   Docstrings for agent tools are critical as the OpenAI Agents SDK uses them for schema generation and LLM understanding.
+*   **Inline Comments**: Use inline comments (`#`) to explain complex logic, assumptions, or workarounds. Avoid comments that merely restate what the code does. Comments should explain *why*, not *what*.
+*   **TODO Comments**: Use `TODO:` comments to mark areas needing future attention. Include a brief explanation, and optionally a JIRA ID or author: `TODO(JIRA-XYZ): Refactor this to use the new CUA error handling. - @username`.
+
+## 2. AI Interaction Guidelines (For Human Developers Interacting with Cursor)
+
+*   **Clarity in Prompts**: Be specific about what you want to accomplish. Provide context, file names (`@file.py`), or even snippets of existing code.
+*   **Iterative Refinement**: Expect to guide the AI. Review its suggestions, provide feedback, and iterate. Do not expect perfect code on the first try for complex tasks.
+*   **Agent Mode for Broad Changes**: For tasks involving multiple files or requiring architectural understanding, use Cursor's Agent Mode (`Cmd/Ctrl+Shift+L`).
+*   **Review AI Output Critically**: Always thoroughly review code generated by the AI before committing. You are responsible for the code.
+*   **Feedback to AI**: If the AI makes a mistake or misunderstands, clearly point it out. Example: "This implementation doesn't use the `core.oauth_manager.get_valid_token()` function as required by `api.mdc`."
+*   **Data Fabrication**: The AI **MUST NEVER** fabricate data, API responses, or file contents when information is missing. It **MUST** indicate uncertainty or ask for the missing information. If you see this behavior, correct it immediately.
+
+## 3. Version Control (Git)
+
+*   **Commit Messages**:
+    *   Follow the [Conventional Commits](https://www.conventionalcommits.org/) specification.
+    *   Prefixes: `feat:`, `fix:`, `docs:`, `style:`, `refactor:`, `perf:`, `test:`, `chore:`, `build:`, `ci:`.
+    *   Subject line: Imperative mood, concise (ideally <60 chars), no period at the end.
+    *   Body (optional): Explain *what* and *why* vs. *how*.
+    *   Example: `feat(cua): Implement basic Playwright navigation tool for X profile page`
+*   **Branching Strategy**:
+    *   `main` branch is protected and represents stable, released code (or the latest stable development).
+    *   Develop features on `feature/your-feature-name` branches created from `main` (or `develop` if used).
+    *   Fixes on `fix/issue-description` branches.
+    *   Submit Pull Requests (PRs) for review before merging to `main`/`develop`.
+*   **Atomic Commits**: Strive for atomic commits. Each commit should represent a single logical change.
+*   **No Secrets in Repository**: The `.env` file and any other files containing secrets **MUST** be in `.gitignore`. API keys or sensitive data **MUST NEVER** be committed to the repository.
+
+## 4. Testing
+
+*   **Standard Practice**: Testing is a standard and non-negotiable part of development. All new features and significant bug fixes **MUST** include corresponding tests.
+*   **Frameworks**: `pytest` is the standard testing framework.
+*   **Test Types**:
+    *   **Unit Tests**: Test individual functions, methods, and classes in isolation. Mock external dependencies (API calls, database interactions not being tested, file system).
+    *   **Integration Tests**: Test interactions between components (e.g., agent invoking a tool, tool interacting with a mock X API).
+*   **Test Coverage**: Aim for high test coverage. Use `pytest-cov` to measure. While a specific percentage isn't mandated rigidly, strive for >80% for new, critical code.
+*   **Test Location**: Tests should reside in a `tests/` directory at the project root, mirroring the project structure (e.g., `tests/tools/test_x_api_tools.py`).
+*   **AI-Assisted Test Generation**: Leverage the AI to help write tests. Prompts should be specific: "Write PyTest unit tests for the `calculate_engagement_score` function in `analysis_tools.py`. Cover scenarios: no interactions, positive interactions, negative interactions, and division by zero if applicable. Mock the `get_tweet_data` dependency."
+*   **All Tests Pass**: All tests **MUST** pass before code is merged into the `main`/`develop` branch. CI pipeline will enforce this.
+
+## 5. Simplicity, Readability, and Maintainability
+
+*   **Prioritize Simplicity**: Solutions **MUST** prioritize simplicity over unnecessary complexity. If a simpler approach achieves the same goal effectively, it is preferred.
+*   **Favor Readability**: Implementations **MUST** favor readability over cleverness or overly concise code that is difficult to understand. Code is read more often than it is written.
+*   **DRY (Don't Repeat Yourself)**: Avoid redundant code. Encapsulate common logic in functions or classes.
+*   **SOLID Principles (Conceptual)**: While not formally enforced for every piece of code, be mindful of SOLID principles (Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion) when designing classes and modules, as they contribute to maintainable and scalable systems.
+*   **Modularity**: Design components (agents, tools, modules) to be as self-contained and loosely coupled as possible.
+
+## 6. Error Handling (General Principles)
+
+*   **Explicit Handling**: Do not ignore errors silently. Handle expected errors gracefully.
+*   **Custom Exceptions**: Define and use custom exceptions (e.g., in `core/exceptions.py`) for project-specific error conditions to allow for more precise error handling.
+*   **Contextual Logging**: When an error is caught, log it with sufficient context (e.g., relevant parameters, state) to aid debugging.
+*   **Fail Fast (where appropriate)**: For unrecoverable errors or invalid states, it's often better to fail fast and clearly rather than continue in an unpredictable state.
+
+## 7. Security (General Principles)
+
+*   **Principle of Least Privilege**: Components should only have the permissions necessary to perform their intended functions.
+*   **Input Validation**: All external inputs (from users, APIs, files, X platform) **MUST** be validated and sanitized before use, especially if used in file paths, database queries, or shell commands.
+*   **Secure Defaults**: Design components with secure default configurations.
+*   **Dependencies**: Keep dependencies up-to-date to incorporate security patches. Regularly review dependencies for known vulnerabilities.
+
+
+*(Note to AI: These general rules form the baseline for all development. Adhere to them unless a more specific rule in another `.mdc` file (as per `ruleHierarchy.md`) provides overriding guidance for a particular context.)*

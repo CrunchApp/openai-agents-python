@@ -1,0 +1,138 @@
+---
+description: 
+globs: **/routes/**/*.py, **/schemas/**/*.py, *api_client.py, agents/**/*_agent.py
+alwaysApply: false
+---
+# API Rules: Autonomous X Agentic Unit
+
+# Description: Rules for designing and implementing internal or external APIs, focusing on RESTful principles, security, and consistency.
+
+## 1. API Design Principles (for APIs exposed by this project)
+
+*   **Paradigm**: RESTful principles **MUST** be followed for any APIs exposed by this system (e.g., for HIL interaction, status monitoring, or external control).
+*   **Resource Naming**:
+    *   Use plural nouns for resource collections (e.g., `/tasks`, `/reviews`).
+    *   Use path parameters for specific resource instances (e.g., `/tasks/{task_id}`).
+    *   Endpoint paths **MUST** be `kebab-case` (e.g., `/human-review-items`).
+*   **HTTP Verb Usage**:
+    *   `GET`: Retrieve resources. Idempotent.
+    *   `POST`: Create new resources or trigger actions. Not idempotent.
+    *   `PUT`: Update an existing resource completely. Idempotent.
+    *   `PATCH`: Partially update an existing resource. Not idempotent (but can be designed to be).
+    *   `DELETE`: Remove a resource. Idempotent.
+*   **Statelessness**: APIs exposed by this system **MUST** be stateless. Each request from a client must contain all information needed to understand and process the request. Server should not store any client session state.
+*   **Versioning**: If API versioning becomes necessary, use URI path versioning (e.g., `/v1/tasks`). Initially, aim for unversioned APIs if scope is internal and limited.
+
+## 2. Request/Response Structure
+
+### 2.1. Data Format
+*   **JSON**: All request and response bodies **MUST** use JSON (`application/json`).
+*   **Field Naming**: Request and response body fields **MUST** use `snake_case` (e.g., `task_id`, `user_name`).
+
+### 2.2. Success Responses
+*   **Status Codes**:
+    *   `200 OK`: General success for `GET`, `PUT`, `PATCH`, `DELETE` (if no content returned from `DELETE`).
+    *   `201 Created`: Successful creation of a new resource (`POST`). Response body **SHOULD** include the created resource, or at least a link to it.
+    *   `202 Accepted`: Request accepted for processing, but processing is not complete (e.g., for asynchronous tasks).
+    *   `204 No Content`: Successful request but no response body (e.g., for `DELETE` operations).
+*   **Structure (General for `GET` returning a single resource)**:
+    ```json
+    {
+        "data": {
+            "resource_field_one": "value1",
+            "resource_field_two": "value2"
+        }
+    }
+    ```
+*   **Structure (General for `GET` returning a list of resources)**:
+    ```json
+    {
+        "data": [
+            {"resource_field_one": "valueA1", "resource_field_two": "valueA2"},
+            {"resource_field_one": "valueB1", "resource_field_two": "valueB2"}
+        ],
+        "pagination": { // Optional, if pagination is implemented
+            "total_items": 100,
+            "per_page": 10,
+            "current_page": 1,
+            "next_page_token": "abc123xyz" // Or next_page_url
+        }
+    }
+    ```
+
+### 2.3. Error Responses
+*   **Status Codes**:
+    *   `400 Bad Request`: Client-side error (e.g., malformed JSON, invalid parameters, validation failed).
+    *   `401 Unauthorized`: Authentication is required and has failed or has not yet been provided.
+    *   `403 Forbidden`: Authenticated user does not have permission to access the resource or perform the action.
+    *   `404 Not Found`: The requested resource does not exist.
+    *   `405 Method Not Allowed`: The HTTP method used is not supported for this resource.
+    *   `409 Conflict`: Request conflicts with the current state of the resource (e.g., trying to create a duplicate resource).
+    *   `429 Too Many Requests`: Rate limiting has been applied.
+    *   `500 Internal Server Error`: A generic server-side error occurred. Avoid using this if a more specific 5xx code is applicable.
+    *   `503 Service Unavailable`: The server is temporarily unable to handle the request (e.g., overloaded or down for maintenance).
+*   **Structure**: All error responses **MUST** follow a consistent JSON structure:
+    ```json
+    {
+        "error": {
+            "code": "ERROR_CODE_SLUG", // e.g., "VALIDATION_ERROR", "UNAUTHENTICATED"
+            "message": "A human-readable description of the error.",
+            "details": { // Optional: for more specific error information, e.g., field validation errors
+                "field_name": ["Error message for this field."]
+            }
+        }
+    }
+    ```
+    Error messages for `5xx` errors in production **SHOULD NOT** expose sensitive internal details (e.g., stack traces). Log those details server-side.
+
+### 2.4. Data Validation & Schemas (using Pydantic)
+*   If Pydantic is adopted (as per `techContext.md`), request bodies and response bodies for any exposed APIs **MUST** be defined using Pydantic models to ensure strict data validation and clear schema definition.
+*   Validation errors from Pydantic **SHOULD** be translated into the standard `400 Bad Request` error response structure, populating the `details` field.
+
+## 3. Authentication & Authorization
+
+*   **Authentication**: Any exposed API **MUST** be protected.
+    *   **Method**: Prefer simple, secure API Key authentication for internal/trusted-client APIs. The API key **MUST** be passed in an `Authorization` header (e.g., `Authorization: ApiKey YOUR_API_KEY`).
+    *   If more complex user-specific authentication is needed, JWT Bearer tokens would be considered.
+    *   API keys **MUST** be securely generated, stored (e.g., hashed in DB if verifiable, or managed via a secrets system), and managed.
+*   **Authorization**:
+    *   Implement checks to ensure the authenticated client (identified by API key or token) has the necessary permissions to perform the requested action on the target resource.
+    *   This might be simple (e.g., a single API key allows all actions) or more granular if different clients/roles are introduced.
+
+## 4. Security
+
+*   **HTTPS**: All APIs exposed externally (even if "internal" to a broader system outside this project's immediate deployment) **MUST** be served over HTTPS.
+*   **Input Validation**:
+    *   Beyond Pydantic schema validation, all input parameters (path, query, body) **MUST** be rigorously validated on the server-side for type, format, range, and business logic constraints before processing.
+    *   Sanitize inputs if they are to be used in constructing queries for other systems (though parameterized queries are preferred for DBs) or shell commands (avoid direct shell execution).
+*   **Rate Limiting**: Implement rate limiting on all exposed APIs to prevent abuse and ensure fair usage. This can be IP-based or API-key-based.
+*   **CORS (Cross-Origin Resource Sharing)**: If the API needs to be accessed by web frontends from different origins, configure CORS policies carefully and restrictively (e.g., allow specific origins only).
+*   **Sensitive Data**:
+    *   Avoid exposing unnecessary sensitive data in API responses.
+    *   Passwords or full API keys (other than the one used for auth, if applicable) **MUST NEVER** be returned in API responses.
+*   **Error Handling Middleware**: Use a centralized error handling middleware (if using a web framework like FastAPI or Flask) to catch unhandled exceptions and convert them into the standard JSON error response format. This prevents accidental leakage of stack traces or internal server details.
+
+## 5. API Documentation
+
+*   **Standard**: If APIs are exposed for other services or for HIL UIs, they **MUST** be documented using the OpenAPI Specification (version 3.x).
+*   **Generation**: If Pydantic and a compatible framework (like FastAPI) are used, OpenAPI docs can often be auto-generated. The AI should assist in ensuring Pydantic models and route definitions are rich enough for good documentation generation.
+*   **Content**: Documentation should include:
+    *   Endpoint paths, HTTP methods, and descriptions.
+    *   Request/response schemas (including field descriptions, types, and constraints).
+    *   Authentication methods.
+    *   Example requests and responses.
+    *   Possible error codes and their meanings.
+
+## 6. Consuming External APIs (General Guidance)
+
+*   **Client Libraries/SDKs**: Prefer using official client libraries or SDKs if provided by the external API vendor and they are well-maintained.
+*   **Direct HTTP Calls (`requests` library)**:
+    *   Always set reasonable timeouts (connect and read).
+    *   Handle HTTP errors explicitly (check `response.status_code`).
+    *   Implement retry logic with exponential backoff for transient errors (e.g., 5xx errors, network issues).
+    *   Securely manage API keys for consumed services (via `core/config.py` from environment variables).
+*   **Error Handling**: Wrap API calls in `try-except` blocks. Catch specific exceptions from the `requests` library (e.g., `requests.exceptions.Timeout`, `requests.exceptions.ConnectionError`).
+*   **Logging**: Log requests (headers and body if not sensitive, or just URL and method) and responses (status code, summary of body or error details) for debugging purposes.
+
+
+*(Note to AI: When generating code for API endpoints exposed by this project, strictly adhere to these RESTful principles, JSON structures, and security measures. When generating code to consume external APIs, ensure robust error handling, timeout, and retry logic.)*
