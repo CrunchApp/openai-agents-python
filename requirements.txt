@@ -1,0 +1,10 @@
+# Core Dependencies for X Agentic Unit
+
+python-dotenv
+pydantic # For core Pydantic models
+pydantic-settings # For BaseSettings
+requests
+requests-oauthlib
+tweepy
+cryptography
+APScheduler

@@ -7,7 +7,7 @@
 *   **Core AI Framework**: Forked OpenAI Agents SDK
     *   **Baseline Version**: (To be determined based on the initial cloned version, e.g., OpenAI Agents SDK v0.5.0). This project will introduce custom modifications and extensions to this base. Cursor must prioritize project-specific implementations found within our codebase over generic knowledge of the public OpenAI Agents SDK.
 *   **LLM Interaction**: OpenAI API
-    *   **Models**: Primarily GPT-o4-mini and GPT-4.1 for agent reasoning and content generation. GPT-3.5-Turbo may be used for less complex, speed-sensitive tasks if explicitly specified.
+    * **Models (for the Agentic Unit itself)**: Primarily OpenAI's GPT-4 series (e.g., GPT-4o, GPT-4.1) for agent reasoning, decision-making, and content generation tasks. Simpler/faster models like GPT-3.5-Turbo may be considered for highly specific, low-complexity, high-volume internal tasks if performance/cost becomes a factor.
     *   **Computer Use Tool**: OpenAI's `computer_use_preview` tool (accessed via Responses API or as a hosted tool within the Agents SDK).
 *   **Operating System Considerations**: The primary development and deployment target is Linux-based environments (e.g., Ubuntu LTS). CUA operations involving direct computer control will be designed with this in mind, though browser automation aspects (via Playwright) aim for cross-platform compatibility where feasible.
 
@@ -15,7 +15,7 @@
 
 *   **X API Interaction**:
     *   `tweepy`: Version 4.10.x or later (for X API v2 interactions).
-    *   `requests`: Latest stable version (for direct HTTP calls if Tweepy is insufficient or for other API interactions).
+    *   `requests`: Latest stable version (Primary library for direct X API v2 calls, especially user-context write actions. Also for other general HTTP interactions).
     *   `requests-oauthlib`: Latest stable version (for managing X API OAuth 2.0 PKCE flows and token refresh).
 *   **Computer Use & GUI Automation**:
     *   `Playwright`: Latest stable Python version (for browser automation tasks as part of CUA or traditional GUI automation).
@@ -26,6 +26,7 @@
     *   `APScheduler`: Version 3.9.x or later.
 *   **Environment & Configuration Management**:
     *   `python-dotenv`: Latest stable version (for loading `.env` files).
+    *   `pydantic`: Version 1.10.x or V2.x (as per project choice, see below). Used for `BaseSettings` in `core/config.py` and potentially for tool argument/API model validation.
 *   **Code Quality & Formatting**:
     *   `Ruff`: Latest stable version (for linting and formatting, replacing Black, Flake8, isort). Project configuration will be in `pyproject.toml`.
 *   **Testing**:
@@ -33,7 +34,7 @@
     *   `pytest-cov`: For test coverage reporting.
     *   `pytest-mock`: For mocking dependencies in tests.
 *   **Serialization/Validation (for Agent Tools & API models, if any)**:
-    *   `Pydantic`: Version 1.10.x or V2.x (If Pydantic is heavily used in the forked SDK base or for new tool/API definitions, this specific version constraint is critical. The project will standardize on one major version.)
+    *   `Pydantic`: Current project usage in `core/config.py` uses `from pydantic import BaseSettings`. We will standardize on Pydantic **V2.x** for all new Pydantic usage (e.g., for tool arguments, API request/response models if any are built). This implies `core/config.py` should eventually be updated to use `from pydantic_settings import BaseSettings` to align with Pydantic V2 best practices for settings management. For now, new Pydantic models should use V2 features. `pip install "pydantic>=2.0.0"` and `pip install "pydantic-settings>=2.0.0"`.
 *   **Security (Cryptography for token encryption)**:
     *   `cryptography`: Latest stable version (if implementing database-level encryption for OAuth tokens).
 

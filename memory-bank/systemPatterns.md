@@ -28,6 +28,7 @@
     2.  **CUA/GUI for Gaps & Cost Optimization**: For functionalities not well-supported by the available X API tier, actions with prohibitive API costs, or tasks requiring direct UI manipulation (e.g., some profile image updates), the system will utilize the `ComputerUseAgent`. This agent, in turn, uses OpenAI's "Computer Use" tool or custom Playwright scripts.
 *   **Decision Logic**: The `OrchestratorAgent` will be primarily responsible for deciding which interaction method to use based on the nature of the task, pre-defined rules (e.g., "always use CUA for profile banner updates"), and potentially dynamic factors like observed API rate limit pressure (future enhancement).
 *   **Rationale**: This hybrid approach aims for the robustness of API interactions where feasible, while providing flexibility and cost-control through CUA/GUI automation for specific use cases. It acknowledges the evolving and potentially restrictive nature of X API access.
+    *   **Proven `requests` Usage**: Experience in Phase 1 demonstrated that direct `requests` calls, with explicitly constructed `Authorization: Bearer <token>` headers, were successful for user-context tweet posting where initial attempts with `tweepy.Client(bearer_token=...)` faced "Unsupported Authentication" issues. This establishes `requests` as a reliable method for direct X API v2 calls when precise header control is needed.
 
 ## 4. Tool Implementation and Usage
 
