@@ -1,46 +1,40 @@
-"""Agent for interacting with the X platform using API tools."""
-
+"""X Interaction Agent for the OpenAI Agents SDK."""
 import logging
 from typing import Dict, Any
 
-from core.oauth_manager import OAuthError
-from tweepy import TweepyException
+from agents import Agent, function_tool
+from tools.x_api_tools import post_text_tweet as _post_text_tweet
 
-from tools.x_api_tools import post_text_tweet
+logger = logging.getLogger(__name__)
+
+@function_tool
+def post_text_tweet(text: str) -> Dict[str, Any]:
+    """Post a text-only tweet using the X API v2.
+
+    Args:
+        text: The text content of the tweet.
+
+    Returns:
+        A dict containing the created tweet data.
+
+    Raises:
+        OAuthError: If authentication fails.
+        XApiError: If the tweet creation fails.
+    """
+    result = _post_text_tweet(text=text)
+    return result
 
 
-class XInteractionAgent:
-    """Agent responsible for performing actions on the X platform."""
+class XInteractionAgent(Agent):
+    """Agent specialized in interacting with the X platform by posting tweets."""
 
     def __init__(self) -> None:
-        """Initialize the XInteractionAgent with a logger."""
-        self._logger = logging.getLogger(__name__)
-
-    def post_tweet(self, text_to_post: str) -> Dict[str, Any]:
-        """Post a tweet to the X platform.
-
-        Args:
-            text_to_post: The content of the tweet to post.
-
-        Returns:
-            A dictionary containing the tweet data returned by the X API.
-
-        Raises:
-            OAuthError: If authentication fails.
-            TweepyException: If the tweet creation fails.
-            Exception: For any other unexpected errors.
-        """
-        self._logger.info("Attempting to post tweet.")
-        try:
-            result = post_text_tweet(text=text_to_post)
-            self._logger.info("Tweet posted successfully: %s", result)
-            return result
-        except OAuthError as e:
-            self._logger.error("OAuth error while posting tweet: %s", e)
-            raise
-        except TweepyException as e:
-            self._logger.error("Tweepy error while posting tweet: %s", e)
-            raise
-        except Exception as e:
-            self._logger.error("Unexpected error while posting tweet: %s", e)
-            raise 
+        super().__init__(
+            name="X Interaction Agent",
+            instructions=(
+                "You are an agent specialized in interacting with the X platform. "
+                "Use the provided tool to post tweets."
+            ),
+            model="gpt-4.1-nano",
+            tools=[post_text_tweet],
+        ) 

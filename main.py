@@ -2,13 +2,10 @@
 
 from core.config import settings
 
-print("--- SETTINGS OBJECT ---")
-print(f"Loaded X_API_KEY: {settings.x_api_key}")
-print(f"Loaded X_API_SECRET_KEY: {settings.x_api_secret_key}") # Check this value
-print(f"Loaded TOKEN_ENCRYPTION_KEY: {settings.token_encryption_key}") # Check this value
-print("--- END SETTINGS OBJECT ---")
+
 
 import logging
+import time
 
 # Configure logging before importing application modules
 log_level = settings.log_level.upper()
@@ -22,16 +19,25 @@ logging.basicConfig(
 )
 
 from agents.orchestrator_agent import OrchestratorAgent
+from core.scheduler_setup import initialize_scheduler
+from agents.scheduling_agent import SchedulingAgent
 
 
 def main() -> None:
-    """Run the orchestrator agent workflow."""
+    """Run the orchestrator agent workflow via scheduler."""
     logger = logging.getLogger(__name__)
     orchestrator = OrchestratorAgent()
+
     try:
-        orchestrator.run_simple_post_workflow(
-            "Hello from the X Agentic Unit! This is a test tweet via the MVP."
-        )
+        scheduler = initialize_scheduler()
+        scheduling_agent = SchedulingAgent(orchestrator, scheduler)
+        scheduling_agent.schedule_mention_processing()
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logger.info("Shutdown signal received. Shutting down scheduler...")
+        scheduler.shutdown()
+        logger.info("Scheduler shut down. Exiting.")
     except Exception as e:
         logger.error("An error occurred during workflow execution: %s", e)
 

@@ -7,8 +7,14 @@
 *   **Core AI Framework**: Forked OpenAI Agents SDK
     *   **Baseline Version**: (To be determined based on the initial cloned version, e.g., OpenAI Agents SDK v0.5.0). This project will introduce custom modifications and extensions to this base. Cursor must prioritize project-specific implementations found within our codebase over generic knowledge of the public OpenAI Agents SDK.
 *   **LLM Interaction**: OpenAI API
-    * **Models (for the Agentic Unit itself)**: Primarily OpenAI's GPT-4 series (e.g., GPT-4o, GPT-4.1) for agent reasoning, decision-making, and content generation tasks. Simpler/faster models like GPT-3.5-Turbo may be considered for highly specific, low-complexity, high-volume internal tasks if performance/cost becomes a factor.
-    *   **Computer Use Tool**: OpenAI's `computer_use_preview` tool (accessed via Responses API or as a hosted tool within the Agents SDK).
+    *   **Models (for the Agentic Unit itself)**: Our strategy will employ a hybrid approach, leveraging different OpenAI models based on task requirements, aligning with OpenAI's guidance for agentic systems:
+            *   **OrchestratorAgent & AnalysisAgent (Primary Reasoning/Planning)**: Will primarily use reasoning models like **`o4-mini`** or **`o3`** (if available and suitable via the Responses API) due to their strengths in long-term planning and complex decision-making.
+            *   **ContentCreationAgent (Content Generation)**: Will use capable text generation models like **`GPT-4.1`** or **`GPT-4o`** (via the Responses API) for high-quality text generation (tweets, replies).
+            *   **ComputerUseAgent (UI Task Planning)**: For planning multi-step UI automation sequences, will leverage reasoning models like **`o4-mini`** or **`o3`**. The underlying OpenAI `computer_use_preview` tool itself (accessed via the Responses API or Agents SDK) will utilize its own integrated vision model.
+            *   **Task Execution Agents (minor LLM calls)**: May use faster, cost-effective models available through the Responses API if the task is well-defined.
+            *   The choice of model for a specific agent or task can be configured.
+        *   **Preferred API for Agent LLM Calls**: For direct interactions with OpenAI LLMs from within our agent logic (e.g., for content generation, decision making not handled by the SDK's agent loop itself), we **MUST** use the **OpenAI Responses API** (`client.responses.create(...)`) with the modern `openai` library (v1.x.x or newer). This aligns with OpenAI's recommended approach for building agentic applications and provides access to built-in tools and a stateful, event-driven architecture. We will **AVOID** using the `client.chat.completions.create(...)` API for new agent logic.
+    *   **Computer Use Tool**: OpenAI's `computer_use_preview` tool (likely accessed via the Responses API or as a hosted tool within the Agents SDK framework, which itself uses the Responses API).
 *   **Operating System Considerations**: The primary development and deployment target is Linux-based environments (e.g., Ubuntu LTS). CUA operations involving direct computer control will be designed with this in mind, though browser automation aspects (via Playwright) aim for cross-platform compatibility where feasible.
 
 ## 2. Key Libraries & Dependencies

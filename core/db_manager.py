@@ -87,7 +87,8 @@ def initialize_database(conn: sqlite3.Connection) -> None:
             """
             CREATE TABLE IF NOT EXISTS human_review_queue (
                 review_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                task_queue_id INTEGER NOT NULL,
+                task_queue_id INTEGER,
+                task_type TEXT NOT NULL,
                 reason_for_review TEXT,
                 data_for_review TEXT,
                 status TEXT NOT NULL DEFAULT 'pending_review',
@@ -226,6 +227,49 @@ def get_agent_state(state_key: str) -> Optional[str]:
         return row["state_value"] if row else None
     except sqlite3.Error as e:
         logger.error("Failed to retrieve agent state for key %s: %s", state_key, e)
+        raise
+    finally:
+        conn.close()
+
+
+def save_human_review_item(
+    task_type: str,
+    data_payload_json: str,
+    reason_for_review: str,
+    initial_status: str = "pending_review",
+) -> int:
+    """Insert a new item into the human_review_queue for human review.
+
+    Args:
+        task_type: The type of task requiring review.
+        data_payload_json: JSON-serialized payload for review.
+        reason_for_review: A text explanation for why review is needed.
+        initial_status: Review request status, defaults to 'pending_review'.
+
+    Returns:
+        The review_id of the newly created review request.
+
+    Raises:
+        sqlite3.Error: If the database operation fails.
+    """
+    conn = get_db_connection()
+    try:
+        with conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO human_review_queue (
+                    task_queue_id,
+                    task_type,
+                    reason_for_review,
+                    data_for_review,
+                    status
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (None, task_type, reason_for_review, data_payload_json, initial_status),
+            )
+            return cursor.lastrowid
+    except sqlite3.Error as e:
+        logger.error("Failed to save human review item: %s", e)
         raise
     finally:
         conn.close() 

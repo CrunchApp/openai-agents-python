@@ -114,7 +114,7 @@ def get_mentions(since_id: Optional[str] = None) -> Dict[str, Any]:
         "tweet.fields": "created_at,author_id,text",
         "expansions": "author_id",
         "user.fields": "username,name",
-        "max_results": "20",
+        "max_results": 20,
     }
     if since_id:
         params["since_id"] = since_id
