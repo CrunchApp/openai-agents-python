@@ -1,11 +1,10 @@
 """Main entry point for the X Agentic Unit application."""
 
-from core.config import settings
-
-
-
+import asyncio
 import logging
 import time
+
+from core.config import settings
 
 # Configure logging before importing application modules
 log_level = settings.log_level.upper()
@@ -18,20 +17,21 @@ logging.basicConfig(
     ],
 )
 
-from agents.orchestrator_agent import OrchestratorAgent
-from core.scheduler_setup import initialize_scheduler
-from agents.scheduling_agent import SchedulingAgent
+from core.scheduler_setup import initialize_scheduler  # noqa: E402
+from project_agents.scheduling_agent import SchedulingAgent  # noqa: E402
 
 
-def main() -> None:
-    """Run the orchestrator agent workflow via scheduler."""
+async def main() -> None:
+    """Run the orchestrator agent workflow via scheduler and Runner."""
     logger = logging.getLogger(__name__)
-    orchestrator = OrchestratorAgent()
 
     try:
+        # Initialize scheduler and schedule the orchestrator workflow
         scheduler = initialize_scheduler()
-        scheduling_agent = SchedulingAgent(orchestrator, scheduler)
+        scheduling_agent = SchedulingAgent(scheduler)
         scheduling_agent.schedule_mention_processing()
+        scheduling_agent.schedule_approved_reply_processing()
+        # Keep the application running to allow scheduled jobs to execute
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
@@ -43,4 +43,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main() 
+    asyncio.run(main())

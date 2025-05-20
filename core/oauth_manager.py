@@ -1,15 +1,16 @@
 """
 Module for managing X API OAuth2 tokens with PKCE: encryption, storage, retrieval, refresh logic, and utility function for obtaining valid tokens.
 """
-from typing import List, Tuple, Optional
-from datetime import datetime, timedelta, timezone
+
 import logging
+from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import requests
 from cryptography.fernet import Fernet, InvalidToken
 
 from core.config import settings
-from core.db_manager import save_oauth_tokens, get_oauth_tokens
+from core.db_manager import get_oauth_tokens, save_oauth_tokens
 
 # Initialize logger for this module
 debug_logger = logging.getLogger(__name__)
@@ -17,6 +18,7 @@ debug_logger = logging.getLogger(__name__)
 
 class OAuthError(Exception):
     """Custom exception for OAuth manager errors."""
+
     pass
 
 
@@ -61,7 +63,7 @@ def save_tokens(
     access_token: str,
     refresh_token: Optional[str],
     expires_at: datetime,
-    scopes: List[str],
+    scopes: list[str],
 ) -> None:
     """Encrypt and save OAuth tokens to the database for a given user.
 
@@ -94,7 +96,7 @@ def save_tokens(
 
 def get_tokens(
     user_x_id: str = "default_user",
-) -> Tuple[str, Optional[str], datetime, List[str]]:
+) -> tuple[str, Optional[str], datetime, list[str]]:
     """Retrieve and decrypt the latest tokens for a user.
 
     Args:
@@ -116,9 +118,7 @@ def get_tokens(
         scopes_str = row["scopes"]
 
         access_token = _decrypt_token(encrypted_access)
-        refresh_token = (
-            _decrypt_token(encrypted_refresh) if encrypted_refresh else None
-        )
+        refresh_token = _decrypt_token(encrypted_refresh) if encrypted_refresh else None
         expires_at_dt = datetime.fromisoformat(expires_at_iso)
         if scopes_str:
             scopes = [s for s in scopes_str.strip().split(" ") if s]
@@ -164,18 +164,14 @@ def refresh_access_token(user_x_id: str = "default_user") -> str:
                 response.status_code,
                 response.text,
             )
-            raise OAuthError(
-                f"Token refresh failed: {response.status_code}"
-            )
+            raise OAuthError(f"Token refresh failed: {response.status_code}")
         token_data = response.json()
         new_access = token_data["access_token"]
         # Use new_refresh if returned, else fallback to existing
         new_refresh = token_data.get("refresh_token", refresh_token)
         expires_in = token_data.get("expires_in")
         new_expires = (
-            datetime.now(timezone.utc) + timedelta(seconds=expires_in)
-            if expires_in
-            else expires_at
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in) if expires_in else expires_at
         )
         scope_str = token_data.get("scope", " ".join(scopes))
         new_scopes = scope_str.split(" ") if scope_str else []
@@ -206,4 +202,4 @@ def get_valid_x_token(user_x_id: str = "default_user") -> str:
     # If token is expired or will expire within 5 minutes, refresh
     if datetime.now(timezone.utc) + timedelta(minutes=5) >= expires_at:
         return refresh_access_token(user_x_id)
-    return access_token 
+    return access_token

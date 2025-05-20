@@ -1,24 +1,21 @@
 import logging
-import pytest
 
-from agents.content_creation_agent import ContentCreationAgent
+from project_agents.content_creation_agent import ContentCreationAgent
 
 
 def test_draft_reply_structure_and_logging(caplog):
     """Test that draft_reply returns correct structure and logs appropriately."""
     caplog.set_level(logging.INFO)
     agent = ContentCreationAgent()
-    original_text = (
-        "This is a sample tweet that mentions the agent for help!"
-    )
+    original_text = "This is a sample tweet that mentions the agent for help!"
     author = "testuser"
     tweet_id = "12345"
     result = agent.draft_reply(original_text, author, tweet_id)
 
     # Check that an info log was created with the correct message
     assert any(
-        record.levelname == "INFO" and
-        f"Drafting reply to tweet ID {tweet_id} from author @{author}" in record.getMessage()
+        record.levelname == "INFO"
+        and f"Drafting reply to tweet ID {tweet_id} from author @{author}" in record.getMessage()
         for record in caplog.records
     )
 
@@ -37,4 +34,4 @@ def test_draft_reply_structure_and_logging(caplog):
     draft_text = result["draft_reply_text"]
     assert draft_text.startswith(f"Thank you @{author}")
     # Ensure the first 30 characters of the original text appear in the draft
-    assert original_text[:30] in draft_text 
+    assert original_text[:30] in draft_text

@@ -1,7 +1,7 @@
 # Core Dependencies for X Agentic Unit
 
 python-dotenv
-pydantic # For core Pydantic models
+pydantic>=2.0.0,<3.0.0  # For core Pydantic models
 pydantic-settings # For BaseSettings
 requests
 requests-oauthlib
@@ -9,10 +9,9 @@ tweepy
 cryptography
 APScheduler
 openai
-sqlite3
+SQLAlchemy~=2.0.0
 pytest
 pytest-mock
 pytest-cov
 pytest-asyncio
-pytest-asyncio-mock
-pytest-asyncio-mock
+openai-agents

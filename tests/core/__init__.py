@@ -1,1 +1,1 @@
-"""Package for core tests.""" 
+"""Package for core tests."""

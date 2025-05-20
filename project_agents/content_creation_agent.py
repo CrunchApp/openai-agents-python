@@ -5,12 +5,12 @@ to mentions for human review.
 """
 
 import logging
-from typing import Dict, Any
+from typing import Any
 
-from openai import OpenAI, APIError
+from openai import APIError, OpenAI
 
-from core.config import settings
 from agents import Agent, ModelSettings
+from core.config import settings
 
 
 class ContentCreationAgent(Agent):
@@ -26,8 +26,7 @@ class ContentCreationAgent(Agent):
                 "The user will provide the original tweet text and its author."
             ),
             model="gpt-4o",
-            model_settings=ModelSettings(temperature=0.7),
-            tools=[] # This agent doesn't expose tools, its core is LLM generation
+            tools=[],  # This agent doesn't expose tools, its core is LLM generation
         )
         self.logger = logging.getLogger(__name__)
         self.client = OpenAI(api_key=settings.openai_api_key)
@@ -37,7 +36,7 @@ class ContentCreationAgent(Agent):
         original_tweet_text: str,
         original_tweet_author: str,
         mention_tweet_id: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Draft a reply to a given mention tweet for later human review.
 
         Args:
@@ -57,10 +56,12 @@ class ContentCreationAgent(Agent):
         # Prepare user input for the agent's LLM
         input_messages = [
             {
+                "role": "system",
+                "content": self.instructions
+            },
+            {
                 "role": "user",
-                "content": (
-                    f'Original tweet by @{original_tweet_author}: "{original_tweet_text}"'
-                ),
+                "content": (f'Original tweet by @{original_tweet_author}: "{original_tweet_text}"'),
             }
         ]
         try:
@@ -68,7 +69,6 @@ class ContentCreationAgent(Agent):
             response = self.client.responses.create(
                 model=self.model,
                 input=input_messages,
-                temperature=self.model_settings.temperature,
             )
             reply_text = response.output_text.strip()
         except APIError as e:
@@ -82,4 +82,4 @@ class ContentCreationAgent(Agent):
             "draft_reply_text": reply_text,
             "original_mention_id": mention_tweet_id,
             "status": "drafted_for_review",
-        } 
+        }

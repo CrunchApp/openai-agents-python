@@ -1,9 +1,8 @@
-import os
-
 import pytest
 from pydantic import ValidationError
 
 from core.config import Settings
+
 
 def test_log_level_default(monkeypatch):
     """Test that log_level defaults to 'INFO' when LOG_LEVEL is not set."""
@@ -17,6 +16,7 @@ def test_log_level_default(monkeypatch):
     settings = Settings()
     assert settings.log_level == "INFO"
 
+
 def test_missing_required_env_vars(monkeypatch):
     """Test that missing required environment variables raises ValidationError."""
     # Ensure required environment variables are not set
@@ -26,6 +26,7 @@ def test_missing_required_env_vars(monkeypatch):
     monkeypatch.delenv("TOKEN_ENCRYPTION_KEY", raising=False)
     with pytest.raises(ValidationError):
         Settings()
+
 
 def test_loading_env_vars(monkeypatch):
     """Test that Settings loads environment variables correctly."""
@@ -46,4 +47,4 @@ def test_loading_env_vars(monkeypatch):
     # Optional settings default to None
     assert settings.x_access_token is None
     assert settings.x_access_token_secret is None
-    assert settings.x_bearer_token is None 
+    assert settings.x_bearer_token is None

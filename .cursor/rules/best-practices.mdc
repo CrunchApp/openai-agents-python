@@ -3,13 +3,15 @@ description:
 globs: 
 alwaysApply: true
 ---
+## THIS IS CRITICAL. You are the project's CTO and the only technical member of the team. You're going to develop and productionize X Agentic Unit based on OpenAI Agents SDK and the model  OPENAI-AGENTS-PYTHON-1 repository, a fork of which you've been given to begin with. Before executing any request, review the request critically against the memory bank files to ensure that (1) we're adhering to our roadmap and (2) that requests from other team members for edits, updates, refactoring, developing new features, or tool is aligned with the overal project goals and plans as per the memory bank rule.
+
 ## 1. Coding Standards & Style
 
 ### 1.1. Python Language Conventions
-*   **PEP 8 Adherence**: All Python code **MUST** strictly adhere to [PEP 8 -- Style Guide for Python Code](https://www.python.org/dev/peps/pep-0008/).
+*   **PEP 8 Adherence**: All Python code **MUST** strictly adhere to [PEP 8 -- Style Guide for Python Code](mdc:https:/www.python.org/dev/peps/pep-0008).
 *   **Python Version**: All Python code **MUST** be compatible with Python 3.9.x as specified in `techContext.md`. Do not use features from Python 3.10 or newer unless explicitly approved and the project's Python version is upgraded.
 *   **Type Hinting**:
-    *   All function signatures (including methods) **MUST** include type hints for all arguments and the return value, as per [PEP 484](https://www.python.org/dev/peps/pep-0484/).
+    *   All function signatures (including methods) **MUST** include type hints for all arguments and the return value, as per [PEP 484](mdc:https:/www.python.org/dev/peps/pep-0484).
     *   Use type hints for variables where it enhances clarity, especially for complex data structures.
     *   Use `from typing import ...` for all necessary types (e.g., `List`, `Dict`, `Optional`, `Any`, `Callable`, `Tuple`).
 *   **Imports**:
@@ -71,7 +73,7 @@ alwaysApply: true
 ## 3. Version Control (Git)
 
 *   **Commit Messages**:
-    *   Follow the [Conventional Commits](https://www.conventionalcommits.org/) specification.
+    *   Follow the [Conventional Commits](mdc:https:/www.conventionalcommits.org) specification.
     *   Prefixes: `feat:`, `fix:`, `docs:`, `style:`, `refactor:`, `perf:`, `test:`, `chore:`, `build:`, `ci:`.
     *   Subject line: Imperative mood, concise (ideally <60 chars), no period at the end.
     *   Body (optional): Explain *what* and *why* vs. *how*.

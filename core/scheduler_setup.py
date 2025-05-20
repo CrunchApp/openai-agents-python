@@ -1,7 +1,11 @@
 """Scheduler setup for APScheduler."""
+
 import logging
 
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.background import BackgroundScheduler
+
+from core.config import settings
 
 
 def initialize_scheduler() -> BackgroundScheduler:
@@ -15,10 +19,15 @@ def initialize_scheduler() -> BackgroundScheduler:
     """
     logger = logging.getLogger(__name__)
     try:
-        scheduler = BackgroundScheduler()
+        jobstores = {
+            "default": SQLAlchemyJobStore(
+                url=f"sqlite:///{settings.sqlite_db_path}", tablename="apscheduler_jobs"
+            )
+        }
+        scheduler = BackgroundScheduler(jobstores=jobstores)
         scheduler.start()
         logger.info("BackgroundScheduler initialized and started.")
         return scheduler
     except Exception as e:
         logger.error("Error initializing BackgroundScheduler: %s", e)
-        raise 
+        raise

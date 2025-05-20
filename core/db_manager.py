@@ -6,7 +6,7 @@ operations for OAuth tokens and core tables.
 """
 import sqlite3
 import logging
-from typing import Optional
+from typing import Optional, Any
 
 from core.config import settings
 
@@ -272,4 +272,53 @@ def save_human_review_item(
         logger.error("Failed to save human review item: %s", e)
         raise
     finally:
-        conn.close() 
+        conn.close()
+
+
+# -------------------------------------------------------------------------
+# Functions for processing approved replies from human_review_queue
+# -------------------------------------------------------------------------
+def get_approved_reply_tasks() -> list[dict[str, Any]]:
+    """Get tasks from human_review_queue with status 'approved' for reply_to_mention."""
+    conn = get_db_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT review_id, data_for_review
+            FROM human_review_queue
+            WHERE status = 'approved' AND task_type = 'reply_to_mention'
+            """
+        )
+        rows = cursor.fetchall()
+        tasks: list[dict[str, Any]] = []
+        for row in rows:
+            tasks.append({
+                "review_id": row["review_id"],
+                "data_for_review": row["data_for_review"]
+            })
+        return tasks
+    except sqlite3.Error as e:
+        logger.error("Failed to fetch approved reply tasks: %s", e)
+        raise
+    finally:
+        conn.close()
+
+def update_human_review_status(review_id: int, new_status: str) -> None:
+    """Update the status of a human review task and set reviewed_at timestamp."""
+    conn = get_db_connection()
+    try:
+        with conn:
+            conn.execute(
+                """
+                UPDATE human_review_queue
+                SET status = ?, reviewed_at = CURRENT_TIMESTAMP
+                WHERE review_id = ?
+                """,
+                (new_status, review_id),
+            )
+    except sqlite3.Error as e:
+        logger.error("Failed to update human review status for review_id %s: %s", review_id, e)
+        raise
+    finally:
+        conn.close()

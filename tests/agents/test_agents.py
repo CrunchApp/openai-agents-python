@@ -1,9 +1,8 @@
 import pytest
 
-from agents.x_interaction_agent import XInteractionAgent
-from agents.orchestrator_agent import OrchestratorAgent
 from core.oauth_manager import OAuthError
-from tweepy import TweepyException
+from project_agents.orchestrator_agent import OrchestratorAgent
+from project_agents.x_interaction_agent import XInteractionAgent
 from tools.x_api_tools import XApiError
 
 
@@ -49,7 +48,7 @@ def test_post_tweet_unexpected_error(mocker):
         side_effect=Exception("unexpected"),
     )
     agent = XInteractionAgent()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         agent.post_tweet("hello")
 
 
@@ -78,6 +77,6 @@ def test_run_simple_post_workflow_exception(mocker):
         return_value=mock_x_agent,
     )
     orchestrator = OrchestratorAgent()
-    with pytest.raises(Exception):
+    with pytest.raises(Exception):  # noqa: B017
         orchestrator.run_simple_post_workflow("error content")
-    mock_x_agent.post_tweet.assert_called_once_with(text_to_post="error content") 
+    mock_x_agent.post_tweet.assert_called_once_with(text_to_post="error content")

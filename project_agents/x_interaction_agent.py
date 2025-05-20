@@ -1,18 +1,21 @@
 """X Interaction Agent for the OpenAI Agents SDK."""
+
 import logging
-from typing import Dict, Any
+from typing import Any, Optional
 
 from agents import Agent, function_tool
 from tools.x_api_tools import post_text_tweet as _post_text_tweet
 
 logger = logging.getLogger(__name__)
 
+
 @function_tool
-def post_text_tweet(text: str) -> Dict[str, Any]:
+def post_text_tweet(text: str, in_reply_to_tweet_id: Optional[str] = None) -> dict[str, Any]:
     """Post a text-only tweet using the X API v2.
 
     Args:
         text: The text content of the tweet.
+        in_reply_to_tweet_id: Optional tweet ID to reply to.
 
     Returns:
         A dict containing the created tweet data.
@@ -21,7 +24,7 @@ def post_text_tweet(text: str) -> Dict[str, Any]:
         OAuthError: If authentication fails.
         XApiError: If the tweet creation fails.
     """
-    result = _post_text_tweet(text=text)
+    result = _post_text_tweet(text=text, in_reply_to_tweet_id=in_reply_to_tweet_id)
     return result
 
 
@@ -37,4 +40,4 @@ class XInteractionAgent(Agent):
             ),
             model="gpt-4.1-nano",
             tools=[post_text_tweet],
-        ) 
+        )

@@ -1,26 +1,27 @@
 """X API tools module for interacting with Twitter via Tweepy."""
 
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import requests
 
 from core.oauth_manager import OAuthError, get_valid_x_token
-from core.config import settings
 
 logger = logging.getLogger(__name__)
 
 
 class XApiError(Exception):
     """Custom exception for X API request failures."""
+
     pass
 
 
-def post_text_tweet(text: str) -> Dict[str, Any]:
+def post_text_tweet(text: str, in_reply_to_tweet_id: Optional[str] = None) -> dict[str, Any]:
     """Post a text-only tweet using the X API v2.
 
     Args:
         text: The text content of the tweet.
+        in_reply_to_tweet_id: Optional tweet ID to reply to.
 
     Returns:
         A dict containing the created tweet data.
@@ -41,6 +42,8 @@ def post_text_tweet(text: str) -> Dict[str, Any]:
         "Content-Type": "application/json",
     }
     payload = {"text": text}
+    if in_reply_to_tweet_id:
+        payload["reply"] = {"in_reply_to_tweet_id": in_reply_to_tweet_id}
     try:
         response = requests.post(url, headers=headers, json=payload)
     except Exception as e:
@@ -48,7 +51,9 @@ def post_text_tweet(text: str) -> Dict[str, Any]:
         raise XApiError("Failed to send tweet request") from e
 
     if response.status_code != 201:
-        logger.error("Tweet creation failed: status %s, response %s", response.status_code, response.text)
+        logger.error(
+            "Tweet creation failed: status %s, response %s", response.status_code, response.text
+        )
         try:
             error_details = response.json()
             logger.error("Error details: %s", error_details)
@@ -65,7 +70,7 @@ def post_text_tweet(text: str) -> Dict[str, Any]:
     return data
 
 
-def get_mentions(since_id: Optional[str] = None) -> Dict[str, Any]:
+def get_mentions(since_id: Optional[str] = None) -> dict[str, Any]:
     """Fetch mentions of the authenticated user's account from X API v2.
 
     Args:
@@ -99,7 +104,9 @@ def get_mentions(since_id: Optional[str] = None) -> Dict[str, Any]:
             user_resp.status_code,
             user_resp.text,
         )
-        raise XApiError(f"Failed to fetch authenticated user info with status code {user_resp.status_code}")
+        raise XApiError(
+            f"Failed to fetch authenticated user info with status code {user_resp.status_code}"
+        )
 
     try:
         user_data = user_resp.json()
@@ -110,7 +117,7 @@ def get_mentions(since_id: Optional[str] = None) -> Dict[str, Any]:
 
     # Fetch mentions for the user
     mentions_url = f"https://api.twitter.com/2/users/{user_id}/mentions"
-    params: Dict[str, Any] = {
+    params: dict[str, Any] = {
         "tweet.fields": "created_at,author_id,text",
         "expansions": "author_id",
         "user.fields": "username,name",
@@ -144,4 +151,4 @@ def get_mentions(since_id: Optional[str] = None) -> Dict[str, Any]:
         logger.error("Failed to parse mentions response JSON: %s", e)
         raise XApiError("Failed to parse mentions response JSON") from e
 
-    return data 
+    return data

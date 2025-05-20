@@ -4,7 +4,7 @@ from typing import Optional
 
 from dotenv import load_dotenv
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict # Import SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict  # Import SettingsConfigDict
 
 # Ensure .env is loaded FIRST, populating os.environ
 load_dotenv()
@@ -20,13 +20,14 @@ print(f"SQLITE_DB_PATH from os.getenv: {os.getenv('SQLITE_DB_PATH')}")
 print("--- END DEBUG ---")
 # --- END DEBUG ---
 
+
 class Settings(BaseSettings):
     # Pydantic will automatically look for environment variables
     # matching these field names (case-insensitively by default, but our Config makes it sensitive).
     # The `env` parameter in `Field` is technically redundant if the field name matches the env var name.
     # However, it's good for explicit mapping if they differ. Since they match, it should work.
 
-    openai_api_key: str = Field(..., validation_alias="OPENAI_API_KEY") # Using alias for clarity
+    openai_api_key: str = Field(..., validation_alias="OPENAI_API_KEY")  # Using alias for clarity
     x_api_key: str = Field(..., validation_alias="X_API_KEY")
     x_api_secret_key: str = Field(..., validation_alias="X_API_SECRET_KEY")
     token_encryption_key: str = Field(..., validation_alias="TOKEN_ENCRYPTION_KEY")
@@ -40,10 +41,11 @@ class Settings(BaseSettings):
 
     # This tells pydantic-settings how to load settings
     model_config = SettingsConfigDict(
-        env_file=None, # Explicitly disable pydantic-settings' own .env loading
+        env_file=None,  # Explicitly disable pydantic-settings' own .env loading
         case_sensitive=True,
-        extra='ignore' # Ignore extra environment variables not defined in Settings
+        extra="ignore",  # Ignore extra environment variables not defined in Settings
     )
+
 
 # Singleton settings instance for the application
 settings = Settings()

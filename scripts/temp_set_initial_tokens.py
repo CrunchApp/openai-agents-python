@@ -17,8 +17,8 @@ def main() -> None:
 
     # Placeholder values - replace these with actual tokens and values
     user_x_id: str = "default_user"
-    access_token: str = "THJ3WEdtY0gxSlBUZFdaNi03MVUyYzdoX3U1X2Jzekp1V01PNVF4RWtUWGdjOjE3NDczNDQwNTM1MTQ6MTowOmF0OjE"
-    refresh_token: str = "dnJMN0IzTVczOHkxZThvWTJPaHRzbWJnTDRlcmQ3VENXMzRZZTYwTnVGa3JhOjE3NDczNDQwNTM1MTQ6MToxOnJ0OjE"
+    access_token: str = "cHpfUFg2YlA4dkdZdjJrRFBybE94UE9YVlBsaXhaMTk0dmNnbzRVRGxPczlZOjE3NDc2Njg2Mzg4OTk6MToxOmF0OjE"
+    refresh_token: str = "dlBfQUFLeE1fOW13RWNRUzdaem5FVXQ3dUxHSkdLZVF2Y3I0Z0w5aHljMW1VOjE3NDc2Njg2Mzg4OTk6MTowOnJ0OjE"
     expires_in_seconds: int = 7200  # e.g., 1 hour
     scopes_list: list[str] = [
         "tweet.read",
@@ -40,10 +40,9 @@ def main() -> None:
     )
 
     print(
-        f"Successfully saved tokens for user '{user_x_id}' with expiry at "
-        f"{expires_at.isoformat()}"
+        f"Successfully saved tokens for user '{user_x_id}' with expiry at {expires_at.isoformat()}"
     )
 
 
 if __name__ == "__main__":
-    main() 
+    main()
