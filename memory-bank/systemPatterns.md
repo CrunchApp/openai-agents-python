@@ -111,3 +111,86 @@
 *   **State Synchronization**: CUA maintains awareness of overall agent system state and can provide browser-based verification of API actions or system state.
 *   **Hybrid Operations**: Complex workflows may combine CUA actions (e.g., screenshot capture) with API calls (e.g., data retrieval) and content generation (e.g., LLM analysis) in coordinated sequences.
 *   **Rationale**: Maximizes the strengths of each agent type while providing comprehensive X platform automation capabilities.
+
+## 11. CUA Authentication and Session Management Strategy
+
+*   **Objective**: Enable the `ComputerUseAgent` (CUA) to operate within an authenticated X.com session for designated test accounts, allowing it to perform actions that require login while maintaining security and operational simplicity.
+
+*   **Chosen Approach**: **Manual Login with Persistent Session State (Playwright User Data Directory)**
+    *   This approach uses Playwright's `launch_persistent_context` feature to maintain browser session state (cookies, local storage, session tokens) across CUA executions.
+    *   Authentication is established once through manual login, then persisted for subsequent automated operations.
+
+### Implementation Details
+
+#### 11.1. Configuration Management
+*   **Environment Variable**: `X_CUA_USER_DATA_DIR` specifies the path to the persistent browser profile directory.
+*   **Configuration Setting**: `settings.x_cua_user_data_dir` in `core/config.py` manages this path.
+*   **Default Behavior**: When `X_CUA_USER_DATA_DIR` is not set, CUA operates in fresh, unauthenticated browser sessions.
+
+#### 11.2. LocalPlaywrightComputer Enhancement
+*   **Constructor Parameter**: `user_data_dir_path: Optional[str]` enables persistent session support.
+*   **Browser Launch Strategy**:
+    *   **Persistent Context**: When `user_data_dir_path` is provided, uses `playwright.chromium.launch_persistent_context()` to maintain session state.
+    *   **Fresh Browser**: When `user_data_dir_path` is `None`, uses standard `playwright.chromium.launch()` for ephemeral sessions.
+*   **Session State Persistence**: All browser data (cookies, local storage, authentication tokens) automatically persists between CUA executions.
+
+#### 11.3. Authentication Workflow
+
+##### Initial Setup (One-Time Manual Process)
+1.  **Environment Configuration**: Set `X_CUA_USER_DATA_DIR=data/cua_profile` in `.env` file.
+2.  **Manual Authentication**: 
+    *   Launch Playwright browser with persistent context pointing to the configured directory.
+    *   Navigate to X.com and manually complete login process for designated test account.
+    *   Complete any MFA, verification, or "Remember me" options.
+    *   Close browser - session state is automatically saved to the user data directory.
+3.  **Verification**: Subsequent CUA launches should bypass login and access authenticated features directly.
+
+##### Operational Usage
+*   **Authenticated Operations**: CUA can access user-specific pages (notifications, settings, profile management) without re-authentication.
+*   **Session Persistence**: Authentication state persists across application restarts and scheduled executions.
+*   **Cost Optimization**: Reduces dependency on X API authentication and associated token management overhead.
+
+#### 11.4. Session Invalidation Detection and Handling
+
+##### Detection Mechanisms
+*   **Agent Instructions**: CUA is trained to recognize logged-out states through UI indicators.
+*   **Authentication Indicators**:
+    *   **Authenticated**: Access to notifications, settings, profile pages without redirects.
+    *   **Unauthenticated**: Login forms, "Sign In" buttons, redirects to authentication pages.
+
+##### Invalidation Response Protocol
+1.  **Immediate Task Abort**: CUA stops current task execution upon detecting session loss.
+2.  **Documentation**: Takes screenshot of login page for audit trail.
+3.  **Error Reporting**: Returns structured error message: `SESSION_INVALIDATED: Browser session is no longer authenticated. Manual re-authentication required.`
+4.  **No Auto-Login**: CUA explicitly **MUST NOT** attempt automatic re-authentication or credential entry.
+5.  **HIL Escalation**: Session invalidation should trigger Human-in-the-Loop workflow for manual re-authentication.
+
+#### 11.5. Security Considerations
+
+*   **Principle of Least Privilege**: CUA browser sessions operate with minimal required permissions.
+*   **Isolated Profiles**: Persistent user data directories are isolated and gitignored to prevent credential exposure.
+*   **No Credential Storage**: Authentication relies on browser session tokens, not stored credentials.
+*   **Access Control**: User data directories should have appropriate file system permissions restricting access.
+
+#### 11.6. Operational Benefits
+
+*   **Cost Efficiency**: Reduces X API authentication overhead and associated rate limiting.
+*   **Feature Completeness**: Enables access to all X platform features available through browser interface.
+*   **Reliability**: Persistent sessions reduce authentication failure points during automated operations.
+*   **Scalability**: Multiple profiles can be maintained for different test accounts or operational scenarios.
+
+#### 11.7. Maintenance Procedures
+
+*   **Session Refresh**: Manual re-authentication required when persistent session expires or is invalidated.
+*   **Profile Management**: Regular cleanup of user data directories to manage disk space.
+*   **Security Audits**: Periodic review of session persistence configurations and access controls.
+*   **Backup Procedures**: Critical authentication profiles should have backup/restore procedures for operational continuity.
+
+### Integration with Multi-Agent Architecture
+
+*   **Orchestrator Coordination**: `OrchestratorAgent` determines when to use authenticated vs. unauthenticated CUA sessions based on task requirements.
+*   **Fallback Strategy**: API-based tools serve as fallback when CUA authentication sessions are unavailable.
+*   **HIL Integration**: Session invalidation events automatically trigger human review queue entries for re-authentication.
+*   **Cross-Agent State**: Authentication status can be shared across agents to inform task delegation decisions.
+
+*   **Rationale**: This authentication strategy balances automation efficiency with security requirements, providing sustainable access to authenticated X platform features while maintaining operational robustness and security compliance.

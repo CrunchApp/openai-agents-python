@@ -17,6 +17,7 @@ print(f"X_API_SECRET_KEY from os.getenv: {os.getenv('X_API_SECRET_KEY')}")
 print(f"TOKEN_ENCRYPTION_KEY from os.getenv: {os.getenv('TOKEN_ENCRYPTION_KEY')}")
 print(f"LOG_LEVEL from os.getenv: {os.getenv('LOG_LEVEL')}")
 print(f"SQLITE_DB_PATH from os.getenv: {os.getenv('SQLITE_DB_PATH')}")
+print(f"X_CUA_USER_DATA_DIR from os.getenv: {os.getenv('X_CUA_USER_DATA_DIR')}")
 print("--- END DEBUG ---")
 # --- END DEBUG ---
 
@@ -35,6 +36,9 @@ class Settings(BaseSettings):
     x_access_token: Optional[str] = Field(None, validation_alias="X_ACCESS_TOKEN")
     x_access_token_secret: Optional[str] = Field(None, validation_alias="X_ACCESS_TOKEN_SECRET")
     x_bearer_token: Optional[str] = Field(None, validation_alias="X_BEARER_TOKEN")
+
+    # CUA Configuration
+    x_cua_user_data_dir: Optional[str] = Field(None, validation_alias="X_CUA_USER_DATA_DIR")
 
     log_level: str = Field("INFO", validation_alias="LOG_LEVEL")
     sqlite_db_path: str = Field("data/agent_data.db", validation_alias="SQLITE_DB_PATH")

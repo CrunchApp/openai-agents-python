@@ -4,9 +4,9 @@ Module providing a Playwright-based AsyncComputer implementation.
 
 import asyncio
 import base64
-from typing import Literal, Optional
+from typing import Literal, Optional, Union
 
-from playwright.async_api import Playwright, Browser, Page, async_playwright
+from playwright.async_api import Playwright, Browser, BrowserContext, Page, async_playwright
 
 from core.computer_env.base import AsyncComputer, Environment, Button
 
@@ -42,11 +42,19 @@ _CUA_KEY_TO_PLAYWRIGHT_KEY: dict[str, str] = {
 class LocalPlaywrightComputer(AsyncComputer):
     """A computer, implemented using a local Playwright browser."""
 
-    def __init__(self) -> None:
-        """Initialize the LocalPlaywrightComputer with uninitialized Playwright, browser, and page."""
+    def __init__(self, user_data_dir_path: Optional[str] = None) -> None:
+        """
+        Initialize the LocalPlaywrightComputer with optional persistent user data directory.
+        
+        Args:
+            user_data_dir_path: Optional path to persistent browser user data directory.
+                              If provided, enables authenticated sessions with saved cookies/state.
+        """
         self._playwright: Optional[Playwright] = None
         self._browser: Optional[Browser] = None
+        self._browser_context: Optional[BrowserContext] = None
         self._page: Optional[Page] = None
+        self.user_data_dir_path = user_data_dir_path
 
     async def __aenter__(self) -> "LocalPlaywrightComputer":
         """Enter context manager: start Playwright and initialize browser and page."""
@@ -56,7 +64,9 @@ class LocalPlaywrightComputer(AsyncComputer):
 
     async def __aexit__(self, exc_type: Optional[type], exc_val: Optional[BaseException], exc_tb: Optional[any]) -> None:
         """Exit context manager: close browser and stop Playwright."""
-        if self._browser:
+        if self._browser_context:
+            await self._browser_context.close()
+        elif self._browser:
             await self._browser.close()
         if self._playwright:
             await self._playwright.stop()
@@ -64,15 +74,32 @@ class LocalPlaywrightComputer(AsyncComputer):
     async def _initialize_browser_and_page(self) -> None:
         """Initialize the browser and page with specified dimensions and default URL."""
         width, height = self.dimensions
-        browser = await self.playwright.chromium.launch(
-            headless=False,
-            args=[f"--window-size={width},{height}"],
-        )
-        page = await browser.new_page()
-        await page.set_viewport_size({"width": width, "height": height})
-        await page.goto("https://x.com")
-        self._browser = browser
-        self._page = page
+        
+        if self.user_data_dir_path:
+            # Use persistent browser context for authenticated sessions
+            self._browser_context = await self.playwright.chromium.launch_persistent_context(
+                user_data_dir=self.user_data_dir_path,
+                headless=False,
+                args=[f"--window-size={width},{height}"],
+                viewport={"width": width, "height": height},
+            )
+            # For persistent context, get the first (default) page or create new one
+            pages = self._browser_context.pages
+            if pages:
+                self._page = pages[0]
+                await self._page.set_viewport_size({"width": width, "height": height})
+            else:
+                self._page = await self._browser_context.new_page()
+        else:
+            # Use standard browser launch for non-persistent sessions
+            self._browser = await self.playwright.chromium.launch(
+                headless=False,
+                args=[f"--window-size={width},{height}"],
+            )
+            self._page = await self._browser.new_page()
+            await self._page.set_viewport_size({"width": width, "height": height})
+        
+        await self._page.goto("https://x.com")
 
     @property
     def playwright(self) -> Playwright:
@@ -81,8 +108,10 @@ class LocalPlaywrightComputer(AsyncComputer):
         return self._playwright
 
     @property
-    def browser(self) -> Browser:
-        """Access the Browser instance."""
+    def browser(self) -> Union[Browser, BrowserContext]:
+        """Access the Browser or BrowserContext instance."""
+        if self._browser_context:
+            return self._browser_context
         assert self._browser is not None, "Browser is not initialized"
         return self._browser
 

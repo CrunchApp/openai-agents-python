@@ -49,11 +49,13 @@ If, during the "Pre-Execution Review & Alignment Verification" process, you iden
 
 
    memory-bank/
-├── @projectBrief.md      # High-level overview: goals, requirements, and key project info.
-├── @productContext.md    # The “why” behind the project: user needs, business context.
-├── @systemPatterns.md    # Architectural decisions, design patterns, and relationships.
-├── @techContext.md       # Technical stack details, dependencies, and environment setup.
-└── @progress.md          # Change tracking: completed work, milestones, and updates.
+├── projectBrief.md      # High-level overview: goals, requirements, and key project info.
+├── productContext.md    # The “why” behind the project: user needs, business context.
+├── systemPatterns.md    # Architectural decisions, design patterns, and relationships.
+├── techContext.md       # Technical stack details, dependencies, and environment setup.
+├── progress.md          # Change tracking: completed work, milestones, and updates.
+└──directoryMap.md       # Repository Structure Map
+
 
 
 ----------------------------------------------------------

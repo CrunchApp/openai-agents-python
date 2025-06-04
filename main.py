@@ -27,14 +27,25 @@ async def main() -> None:
     logger = logging.getLogger(__name__)
 
     try:
-        # CUA test
+        # CUA test with optional persistent session
         logger.info("Starting CUA Test...")
-        async with LocalPlaywrightComputer() as computer:
+        if settings.x_cua_user_data_dir:
+            logger.info("Using persistent browser session from: %s", settings.x_cua_user_data_dir)
+        else:
+            logger.info("Using fresh browser session (no persistent data directory)")
+        
+        async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
             cua_agent = ComputerUseAgent(computer=computer)
             try:
+                # Test task that typically requires authentication
+                test_task = (
+                    "Navigate to the X.com notifications page and take a screenshot. "
+                    "If you encounter a login screen instead of notifications, "
+                    "note this in your response as it indicates an unauthenticated session."
+                )
                 result = await Runner.run(
                     cua_agent,
-                    input="Navigate to x.com and take a screenshot of the main page."
+                    input=test_task
                 )
                 logger.info("CUA Task Result (Final Output): %s", result.final_output)
             except Exception as e:

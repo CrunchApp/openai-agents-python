@@ -147,3 +147,6 @@ cython_debug/
 # Ignore data directory with database
 data/
 !data/.gitkeep
+
+# CUA browser profiles and session data are stored in data/ and automatically ignored above
+# This includes persistent browser sessions with authentication cookies and tokens
