@@ -872,25 +872,46 @@ class ComputerAction:
     ) -> str:
         action = tool_call.action
         if isinstance(action, ActionClick):
-            computer.click(action.x, action.y, action.button)
+            result = computer.click(action.x, action.y, action.button)
+            if asyncio.iscoroutine(result):
+                await result
         elif isinstance(action, ActionDoubleClick):
-            computer.double_click(action.x, action.y)
+            result = computer.double_click(action.x, action.y)
+            if asyncio.iscoroutine(result):
+                await result
         elif isinstance(action, ActionDrag):
-            computer.drag([(p.x, p.y) for p in action.path])
+            result = computer.drag([(p.x, p.y) for p in action.path])
+            if asyncio.iscoroutine(result):
+                await result
         elif isinstance(action, ActionKeypress):
-            computer.keypress(action.keys)
+            result = computer.keypress(action.keys)
+            if asyncio.iscoroutine(result):
+                await result
         elif isinstance(action, ActionMove):
-            computer.move(action.x, action.y)
+            result = computer.move(action.x, action.y)
+            if asyncio.iscoroutine(result):
+                await result
         elif isinstance(action, ActionScreenshot):
-            computer.screenshot()
+            result = computer.screenshot()
+            if asyncio.iscoroutine(result):
+                await result
         elif isinstance(action, ActionScroll):
-            computer.scroll(action.x, action.y, action.scroll_x, action.scroll_y)
+            result = computer.scroll(action.x, action.y, action.scroll_x, action.scroll_y)
+            if asyncio.iscoroutine(result):
+                await result
         elif isinstance(action, ActionType):
-            computer.type(action.text)
+            result = computer.type(action.text)
+            if asyncio.iscoroutine(result):
+                await result
         elif isinstance(action, ActionWait):
-            computer.wait()
+            result = computer.wait()
+            if asyncio.iscoroutine(result):
+                await result
 
-        return computer.screenshot()
+        screenshot_result = computer.screenshot()
+        if asyncio.iscoroutine(screenshot_result):
+            return await screenshot_result
+        return screenshot_result
 
     @classmethod
     async def _get_screenshot_async(
