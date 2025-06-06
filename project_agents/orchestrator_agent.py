@@ -96,6 +96,19 @@ class OrchestratorAgent(Agent):
                     import base64
                     client = OpenAI(api_key=settings.openai_api_key)
                     
+                    # Rationale for direct OpenAI client.responses.create usage for CUA tasks:
+                    # While the agents.Runner can run an Agent (like ComputerUseAgent) with ComputerTool,
+                    # directly interacting with client.responses.create provides finer-grained control.
+                    # This direct approach allows for:
+                    # 1. Precise management of the CUA interaction loop (screenshot -> action -> next prompt).
+                    # 2. Explicit handling and automatic acknowledgment of `pending_safety_checks`,
+                    #    which is crucial for autonomous operation and compliance.
+                    # 3. Immediate detection and branching logic for specific CUA outcomes like `SESSION_INVALIDATED`
+                    #    or detailed `FAILED` states, allowing the Orchestrator to react promptly without
+                    #    waiting for the entire ComputerUseAgent run to complete and return a single result.
+                    # This direct control enhances reliability and enables more robust error handling
+                    # tailored to the X.com CUA workflows.
+                    
                     # Define system instructions (general CUA behavior)
                     system_instructions = (
                         "You are an AI assistant that can control a computer browser to perform tasks on web pages, "
@@ -462,6 +475,19 @@ class OrchestratorAgent(Agent):
                     from openai import OpenAI
                     import base64
                     client = OpenAI(api_key=settings.openai_api_key)
+                    
+                    # Rationale for direct OpenAI client.responses.create usage for CUA tasks:
+                    # While the agents.Runner can run an Agent (like ComputerUseAgent) with ComputerTool,
+                    # directly interacting with client.responses.create provides finer-grained control.
+                    # This direct approach allows for:
+                    # 1. Precise management of the CUA interaction loop (screenshot -> action -> next prompt).
+                    # 2. Explicit handling and automatic acknowledgment of `pending_safety_checks`,
+                    #    which is crucial for autonomous operation and compliance.
+                    # 3. Immediate detection and branching logic for specific CUA outcomes like `SESSION_INVALIDATED`
+                    #    or detailed `FAILED` states, allowing the Orchestrator to react promptly without
+                    #    waiting for the entire ComputerUseAgent run to complete and return a single result.
+                    # This direct control enhances reliability and enables more robust error handling
+                    # tailored to the X.com CUA workflows.
                     
                     # Define system instructions (general CUA behavior)
                     system_instructions = (

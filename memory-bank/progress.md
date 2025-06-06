@@ -50,6 +50,11 @@
         *   Project-specific tests: `tests/core/`, `tests/agents/`, `tests/tools/`
         *   SDK integration tests: 50+ test files covering all functionality
         *   CUA-specific testing: `test_computer_action.py` for browser automation validation
+    *   **✅ NEW MILESTONE**: Re-tested and validated sequential CUA Read & Post Workflows in `main.py`:
+        *   Confirmed persistent authenticated browser session across multiple CUA operations.
+        *   Successfully demonstrated CUA's ability to read the latest tweet and then post a new, distinct tweet in sequence.
+        *   Enhanced logging in `main.py` provides clear feedback on each step's success or failure.
+        *   Validated robustness of session invalidation detection and appropriate handling.
 
 ## 2. Repository Structure & Implementation Status
 
