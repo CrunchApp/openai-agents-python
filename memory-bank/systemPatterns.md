@@ -194,3 +194,142 @@
 *   **Cross-Agent State**: Authentication status can be shared across agents to inform task delegation decisions.
 
 *   **Rationale**: This authentication strategy balances automation efficiency with security requirements, providing sustainable access to authenticated X platform features while maintaining operational robustness and security compliance.
+
+## 12. Keyboard-First Interaction Strategy for CUA
+
+*   **Core Principle**: The `ComputerUseAgent` prioritizes keyboard shortcuts over mouse interactions when automating X.com to maximize reliability, speed, and resilience to UI changes.
+
+*   **Strategic Implementation**: 
+    *   **Primary Method**: Keyboard shortcuts are attempted first for all interactions where X.com provides native keyboard support.
+    *   **Fallback Method**: Mouse clicks are used only when no keyboard equivalent exists or when keyboard shortcuts fail.
+    *   **Comprehensive Coverage**: All 50+ official X.com keyboard shortcuts are integrated into CUA instructions.
+
+### 12.1. Keyboard Shortcut Categories
+
+#### Navigation Shortcuts
+*   **Timeline Navigation**: `j` (next post), `k` (previous post), `Space` (page down), `.` (load new posts)
+*   **Page Navigation**: `g+h` (home), `g+n` (notifications), `g+p` (profile), `g+e` (explore)
+*   **Feature Access**: `g+m` (messages), `g+s` (settings), `g+b` (bookmarks), `g+l` (likes)
+
+#### Action Shortcuts  
+*   **Content Actions**: `l` (like), `r` (reply), `t` (repost), `s` (share), `b` (bookmark)
+*   **Account Actions**: `u` (mute), `x` (block), `Enter` (open details)
+*   **Utility Actions**: `/` (search), `?` (help), `i` (messages dock)
+
+#### Posting Shortcuts
+*   **Compose**: `n` (new post)
+*   **Publishing**: `Ctrl+Shift+Enter` (post tweet), `Ctrl+Enter` (send post)
+
+#### Media Controls
+*   **Video**: `k`/`Space` (play/pause), `m` (mute), `o` (expand photo)
+*   **Audio Dock**: `a+d` (go to dock), `a+Space` (play/pause), `a+m` (mute/unmute)
+
+### 12.2. Implementation in LocalPlaywrightComputer
+
+*   **Enhanced Keypress Method**: Upgraded `keypress()` function with intelligent handling for:
+    *   **Single Character Keys**: Direct processing for all X.com letter shortcuts
+    *   **Sequential Combinations**: Support for `g+` navigation and `a+` audio shortcuts
+    *   **Special Keys**: Mapping for Space, Enter, arrows, and punctuation
+    *   **Complex Combinations**: Proper timing for Ctrl/Cmd combinations
+
+*   **Timing Optimization**: Appropriate delays between key sequences to ensure reliable execution
+*   **Robust Error Handling**: Fallback mechanisms when keyboard shortcuts encounter issues
+
+### 12.3. Agent Instruction Integration
+
+*   **Priority Guidelines**: Clear instructions in `ComputerUseAgent` to attempt keyboard shortcuts before mouse interactions
+*   **Workflow Examples**: Detailed step-by-step processes for common tasks using keyboard-first approach
+*   **Decision Logic**: Explicit criteria for when to fallback to mouse interactions
+
+### 12.4. Operational Benefits
+
+*   **Reliability**: Keyboard shortcuts are less affected by UI layout changes and dynamic content loading
+*   **Speed**: Keyboard actions execute faster than mouse movements and clicks
+*   **Consistency**: Native keyboard shortcuts provide predictable behavior across X.com sessions
+*   **Detection Resistance**: Keyboard interactions appear more natural and reduce automation detection risk
+
+*   **Rationale**: This keyboard-first strategy leverages X.com's native accessibility features to create more robust, efficient, and maintainable browser automation while reducing dependency on fragile mouse-based interactions.
+
+## 13. OrchestratorAgent Direct Response Management Pattern
+
+*   **Pattern Description**: For complex CUA operations requiring fine-grained control, the `OrchestratorAgent` uses direct `client.responses.create()` calls instead of delegating through `Runner.run(cua_agent, ...)`.
+
+*   **Implementation Context**: Specifically applied to CUA tweet posting workflows where precise iteration control, safety check handling, and multi-step coordination are essential.
+
+### 13.1. Technical Implementation
+
+#### Direct Response API Usage
+*   **Primary Method**: `client.responses.create()` with iterative processing of response items
+*   **Model Configuration**: Uses `computer-use-preview` model with appropriate context windows
+*   **Safety Integration**: Handles OpenAI safety checks and acknowledgments within the orchestration loop
+
+#### Iteration Management
+*   **Custom Loop Control**: Manual iteration counting and termination logic
+*   **Response Processing**: Direct handling of different response item types (reasoning, computer_call, message)
+*   **Context Building**: Progressive context accumulation across iterations for complex multi-step workflows
+
+### 13.2. Advantages Over Standard Agent Delegation
+
+#### Fine-Grained Control
+*   **Iteration Limits**: Custom termination criteria based on workflow requirements rather than generic agent limits
+*   **Safety Handling**: Direct processing of safety checks without interrupting the workflow
+*   **Response Analysis**: Immediate access to all response components (reasoning, actions, results)
+
+#### Complex Workflow Support
+*   **Multi-Step Coordination**: Ability to inject orchestrator logic between CUA iterations
+*   **State Management**: Direct control over workflow state and decision points
+*   **Error Recovery**: Custom error handling and retry logic specific to CUA operations
+
+#### Performance Optimization
+*   **Reduced Overhead**: Eliminates agent delegation overhead for time-sensitive operations
+*   **Direct Integration**: Immediate access to CUA responses without additional processing layers
+*   **Streamlined Execution**: Optimized flow for high-frequency CUA interactions
+
+### 13.3. Implementation Examples
+
+#### CUA Tweet Posting Workflow
+```python
+# Direct response management for CUA tweet posting
+response = await client.responses.create(
+    model="computer-use-preview",
+    messages=context_messages,
+    max_tokens=2048
+)
+
+# Process response items directly
+for item in response.output:
+    if item.type == "computer_call":
+        # Execute CUA action immediately
+        result = await computer_tool.execute(item.content)
+        # Add result to context for next iteration
+    elif item.type == "reasoning":
+        # Log reasoning for debugging
+    # Continue iteration logic...
+```
+
+#### Safety Check Integration
+*   **Acknowledgment Handling**: Direct processing of safety warnings without workflow interruption
+*   **Context Preservation**: Maintains full conversation context across safety check interactions
+*   **Workflow Continuity**: Seamless resumption after safety check resolution
+
+### 13.4. When to Use This Pattern
+
+#### Appropriate Scenarios
+*   **Complex CUA Workflows**: Multi-step browser automation requiring precise control
+*   **Time-Sensitive Operations**: Real-time interactions where delegation overhead is problematic
+*   **Safety-Critical Tasks**: Operations requiring custom safety check handling
+*   **Integration Points**: Workflows requiring tight coordination between CUA and other agent operations
+
+#### Alternative Approaches
+*   **Standard Delegation**: Use `Runner.run(agent, ...)` for simple, self-contained tasks
+*   **Agent Handoffs**: Use SDK handoff mechanisms for clear task boundaries
+*   **Tool Invocation**: Use agent tools for discrete, stateless operations
+
+### 13.5. Best Practices
+
+*   **Context Management**: Careful handling of message context to prevent token limit issues
+*   **Error Handling**: Robust exception handling around direct response calls
+*   **Logging**: Comprehensive logging of iterations, decisions, and outcomes
+*   **Documentation**: Clear documentation of custom workflows and their rationale
+
+*   **Rationale**: This pattern provides the precise control needed for complex CUA operations while maintaining the benefits of the OpenAI Agents SDK architecture. It enables sophisticated workflow orchestration without sacrificing reliability or performance.
