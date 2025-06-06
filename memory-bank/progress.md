@@ -297,3 +297,53 @@ Repository Root:
             *   **Performance-optimized workflows** for real-time CUA interactions
     *   **📚 MEMORY BANK STATUS**: All major architectural patterns and implementation strategies fully documented
     *   **🎯 PRODUCTION READINESS**: Documentation supports operational deployment and maintenance procedures
+
+*   **✅ Task 4.1 IMPLEMENTATION COMPLETED**: **CUA Latest Tweet Reading Capability**
+    *   **✅ Task 4.1.1**: Added `get_latest_own_tweet_text_via_cua()` method to `OrchestratorAgent`
+        *   **Complete workflow implementation**: Profile navigation → tweet identification → text extraction
+        *   **Keyboard-first navigation**: Uses proven 'g+p' shortcut for profile access
+        *   **Intelligent text extraction**: Parses tweet content while avoiding metadata (timestamps, counts, etc.)
+        *   **Comprehensive error handling**: Handles navigation failures, empty profiles, session invalidation
+        *   **Safety check automation**: Automatically acknowledges routine social media reading operations
+    *   **✅ Task 4.1.2**: Updated `main.py` for CUA tweet reading test workflow
+        *   **Intelligent result parsing**: Extracts and displays tweet text from CUA success responses
+        *   **Enhanced user guidance**: Provides specific troubleshooting tips based on failure scenarios
+        *   **Character count analysis**: Reports extracted text length for verification purposes
+        *   **Verification recommendations**: Guides user to manually confirm extracted content accuracy
+
+*   **✅ Task 4.2 IMPLEMENTATION COMPLETED**: **CUA System Prompt Refactoring**
+    *   **✅ ARCHITECTURAL IMPROVEMENT**: Refactored CUA invocation to use proper OpenAI message structure
+        *   **System/User Prompt Separation**: Extracted ComputerUseAgent instructions into dedicated `system_instructions` variable
+        *   **Task-Specific Prompts**: Created separate `task_specific_prompt` variables for each CUA workflow
+        *   **Proper Message Structure**: Updated initial API calls to use `[{"role": "system", "content": system_instructions}, {"role": "user", "content": task_specific_prompt}]`
+        *   **Enhanced Model Behavior**: System prompts now properly establish CUA context and capabilities
+        *   **Maintained Functionality**: Preserved all existing keyboard-first strategies and X.com shortcuts
+    *   **✅ IMPLEMENTATION DETAILS**: Applied refactoring to both CUA methods
+        *   **Tweet Posting Method**: `post_tweet_via_cua()` now uses structured prompt architecture
+        *   **Tweet Reading Method**: `get_latest_own_tweet_text_via_cua()` follows same pattern
+        *   **Conversation Flow**: Subsequent API calls continue to use `input_content` with `previous_response_id`
+        *   **Consistency**: Both methods now share identical system instructions while maintaining task-specific user prompts
+    *   **✅ TECHNICAL BENEFITS**: 
+        *   **Improved Model Understanding**: System prompts provide clearer context for CUA behavior
+        *   **Enhanced Reliability**: Proper instruction hierarchy should improve task execution consistency
+        *   **Better Maintainability**: Single source of truth for ComputerUseAgent system instructions
+        *   **Cleaner Architecture**: Separation of concerns between general CUA behavior and specific tasks
+        *   **Production Readiness**: Follows OpenAI best practices for structured prompts in computer use workflows
+
+*   **🔧 CRITICAL BUG FIXES**: **Resolved CUA Task Execution Issues**
+    *   **✅ Issue #1 FIX**: **Missing ComputerUseAgent Instructions**
+        *   **Problem**: Direct OpenAI API calls bypassed ComputerUseAgent class instructions
+        *   **Solution**: Embedded complete ComputerUseAgent instructions into both `post_tweet_via_cua()` and `get_latest_own_tweet_text_via_cua()` prompts
+        *   **Impact**: CUA now receives comprehensive keyboard-first strategy, X.com shortcuts, and implementation guidance
+        *   **Enhanced reliability**: Full access to cookie handling, session detection, and platform-specific instructions
+    *   **✅ Issue #2 FIX**: **g+p Navigation Shortcut Execution**
+        *   **Problem**: g+p keyboard shortcut executed as separate actions instead of proper sequence
+        *   **Solution**: Clarified prompt instructions to specify `keypress(['g', 'p'])` as quick succession sequence
+        *   **Verified implementation**: LocalPlaywrightComputer already handles g+ shortcuts correctly (lines 286-292)
+        *   **Enhanced instructions**: Added explicit guidance on proper X.com navigation shortcut execution
+        *   **Keyboard timing**: Proper 0.1s delay between 'g' and 'p' for X.com recognition
+    *   **✅ CONSISTENCY ACHIEVEMENT**: Both CUA methods now include identical base instructions
+        *   **Unified approach**: Consistent ComputerUseAgent instruction embedding across all CUA workflows
+        *   **Maintained specificity**: Task-specific guidance preserved while ensuring complete instruction coverage
+        *   **Production reliability**: Eliminates instruction omission as source of CUA task failures
+        *   **Future scalability**: Pattern established for all future CUA method implementations
