@@ -242,7 +242,32 @@ tests/
 
 ---
 
-## 7. 📁 `tools/` - Agent Tool Implementations
+## 7. 📁 `memory-bank/` - Project Documentation & Context
+
+```
+memory-bank/
+├── activeContext.md               # Current development state and active tasks
+├── directoryMap.md               # This file - repository structure mapping
+├── productContext.md             # User needs and business context
+├── progress.md                   # Historical milestones and completed work
+├── projectBlueprint.md           # Updated roadmap and implementation structure
+├── projectBrief.md               # High-level overview, goals, and scope
+├── ruleHierarchy.md              # Memory bank rule precedence and organization
+├── systemPatterns.md             # Architectural patterns and design decisions
+└── techContext.md                # Technical stack, dependencies, and environment
+```
+
+**Memory Bank Functions:**
+- **`activeContext.md`**: Current sprint status, active debugging efforts, and immediate tasks
+- **`progress.md`**: Historical record of completed phases, milestones, and achievements
+- **`systemPatterns.md`**: Architectural decisions, CUA patterns, and multi-agent coordination
+- **`techContext.md`**: Technology stack, dependencies, and implementation requirements
+- **`projectBrief.md`**: High-level project goals, scope, and strategic objectives
+- **`productContext.md`**: Business context, user needs, and product rationale
+
+---
+
+## 8. 📁 `tools/` - Agent Tool Implementations
 
 ```
 tools/
@@ -258,7 +283,7 @@ tools/
 
 ---
 
-## Architecture Summary
+## 9. Architecture Summary
 
 This repository structure supports our **CUA-first architecture** with the following key design patterns:
 

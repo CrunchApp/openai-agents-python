@@ -83,3 +83,41 @@ class ContentCreationAgent(Agent):
             "original_mention_id": mention_tweet_id,
             "status": "drafted_for_review",
         }
+
+    def draft_original_post(self, topic_summary: str, persona_prompt: str) -> dict[str, Any]:
+        """Drafts an original tweet post for AIified based on a topic summary and persona instructions.
+
+        Args:
+            topic_summary: A summary of the topic to generate the tweet about.
+            persona_prompt: Instructions defining the persona for the tweet.
+
+        Returns:
+            A dict containing the drafted tweet text, the source topic, and the status.
+        """
+        self.logger.info("Drafting original post for AIified based on topic: %s", topic_summary[:100])
+
+        # Construct messages for OpenAI API client.responses.create
+        # The persona_prompt will act as a system message for this specific generation
+        # The topic_summary will be the user message.
+        input_messages = [
+            {"role": "system", "content": persona_prompt},
+            {"role": "user", "content": f"Based on the following information, please draft an engaging and insightful tweet (max 280 chars):\n\n{topic_summary}"}
+        ]
+        try:
+            response = self.client.responses.create( # Using existing self.client
+                model="gpt-4.1", # Or another capable model for creative generation
+                input=input_messages,
+            )
+            draft_text = response.output_text.strip()
+            # Optional: Add basic validation for length, or let HIL catch it.
+            # if len(draft_text) > 280:
+            #     draft_text = draft_text[:277] + "..."
+        except APIError as e:
+            self.logger.error("OpenAI API error during draft_original_post: %s", e)
+            draft_text = f"Error generating post on: {topic_summary[:50]}..."
+
+        return {
+            "draft_tweet_text": draft_text,
+            "source_topic": topic_summary,
+            "status": "drafted_for_review",
+        }
