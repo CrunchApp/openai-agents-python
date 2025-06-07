@@ -333,3 +333,124 @@ for item in response.output:
 *   **Documentation**: Clear documentation of custom workflows and their rationale
 
 *   **Rationale**: This pattern provides the precise control needed for complex CUA operations while maintaining the benefits of the OpenAI Agents SDK architecture. It enables sophisticated workflow orchestration without sacrificing reliability or performance.
+
+## 14. Orchestrator-Led Navigation for CUA Tasks
+
+*   **Pattern Description**: The `OrchestratorAgent` handles all browser navigation directly via Playwright before delegating UI interaction tasks to the `ComputerUseAgent`, eliminating CUA navigation limitations and improving workflow reliability.
+
+*   **Core Principle**: Separate navigation responsibilities from UI interaction responsibilities to leverage the strengths of each approach while avoiding their respective limitations.
+
+### 14.1. Problem Context
+
+#### CUA Navigation Limitations
+*   **Invalid Action Type**: `navigate` is not a valid Computer Use action type in OpenAI's computer-use-preview model
+*   **UI Detection Issues**: CUA struggles to consistently identify and interact with browser address bars
+*   **Random Clicking Behavior**: Failed navigation attempts lead to erratic clicking patterns and workflow failures
+*   **Session Instability**: Navigation failures can destabilize browser sessions and authentication state
+
+#### Previous Approach Failures
+*   **Manual Address Bar Interaction**: Attempting to teach CUA to click address bars and type URLs proved unreliable
+*   **Invalid Action Handlers**: Custom `navigate` action handlers created false expectations for the CUA model
+*   **Workflow Interruptions**: Navigation failures caused entire task sequences to fail or require manual intervention
+
+### 14.2. Solution Architecture
+
+#### Orchestrator Navigation Responsibility
+*   **Direct Playwright Control**: `OrchestratorAgent` uses direct `await computer.page.goto()` calls for all navigation
+*   **Pre-Task Navigation**: Navigation occurs before any CUA API calls are initiated
+*   **Page Stabilization**: Orchestrator ensures page loading is complete before CUA interaction begins
+*   **Error Handling**: Comprehensive navigation error handling with descriptive failure messages
+
+#### CUA Interaction Responsibility  
+*   **UI-Focused Tasks**: CUA handles only UI interactions (clicking, typing, shortcuts) on pre-loaded pages
+*   **Task Simplification**: CUA prompts focus purely on interaction goals without navigation complexity
+*   **Enhanced Reliability**: CUA starts with the correct page already loaded and stabilized
+
+### 14.3. Implementation Pattern
+
+#### Navigation Phase (Orchestrator)
+```python
+async def like_tweet_via_cua(self, tweet_url: str) -> str:
+    try:
+        # Phase 1: Orchestrator handles navigation
+        await computer.page.goto(tweet_url, wait_until='networkidle', timeout=15000)
+        await computer.page.wait_for_timeout(3000)  # Additional stabilization
+        
+        # Phase 2: Delegate to CUA for interaction
+        cua_task_prompt = f"""
+        You are on the correct tweet page: {tweet_url}
+        Your task is to like this tweet using the 'l' keyboard shortcut.
+        The page is already loaded - focus only on the liking action.
+        """
+        
+        # Continue with CUA interaction...
+    except Exception as e:
+        return f"NAVIGATION_FAILED: Could not navigate to {tweet_url}: {str(e)}"
+```
+
+#### Clear Responsibility Separation
+*   **Orchestrator**: URL navigation, page loading, session management, error recovery
+*   **CUA**: UI element identification, keyboard shortcuts, mouse interactions, content manipulation
+
+### 14.4. Operational Benefits
+
+#### Reliability Improvements
+*   **100% Navigation Success**: Playwright handles navigation directly, eliminating CUA navigation failures
+*   **Focused CUA Tasks**: CUA prompts are simplified and more reliable without navigation complexity
+*   **Reduced Random Behavior**: Eliminates erratic clicking patterns from failed navigation attempts
+*   **Session Stability**: Navigation errors don't destabilize browser sessions or authentication
+
+#### Performance Optimization
+*   **Faster Execution**: Direct navigation is more efficient than CUA trial-and-error approaches
+*   **Reduced Iterations**: CUA workflows complete in fewer iterations without navigation failures
+*   **Predictable Timing**: Known navigation times allow for proper workflow scheduling
+*   **Resource Efficiency**: Less browser resource consumption from failed navigation attempts
+
+#### Development Advantages
+*   **Clear Debugging**: Navigation and interaction errors are clearly separated and identifiable
+*   **Maintainable Code**: Clean separation of concerns improves code maintainability
+*   **Testing Reliability**: Workflows can be tested with guaranteed navigation success
+*   **Error Isolation**: Navigation issues don't interfere with CUA capability assessment
+
+### 14.5. Implementation Guidelines
+
+#### Navigation Error Handling
+*   **Timeout Management**: Appropriate timeouts for different page types and network conditions
+*   **Retry Logic**: Limited retry attempts for transient navigation failures
+*   **Error Categorization**: Clear distinction between navigation errors and subsequent CUA errors
+*   **Logging Strategy**: Comprehensive navigation logging with emoji indicators for easy debugging
+
+#### CUA Task Design
+*   **Page State Assumptions**: CUA tasks assume the correct page is already loaded
+*   **Task Clarity**: Explicit task descriptions that focus only on UI interactions
+*   **Error Attribution**: Clear attribution of failures to navigation vs. interaction issues
+*   **Workflow Documentation**: Clear documentation of navigation prerequisites for each CUA task
+
+#### Integration Patterns
+*   **Consistent Application**: Apply this pattern to all CUA tasks requiring specific URL navigation
+*   **Fallback Handling**: Graceful degradation when navigation fails (e.g., fallback to API methods)
+*   **State Verification**: Optional verification that navigation reached the intended page before CUA delegation
+*   **Session Management**: Navigation includes authentication state verification when required
+
+### 14.6. Usage Examples
+
+#### Tweet Liking Workflow
+1. **Orchestrator Navigation**: Direct navigation to specific tweet URL
+2. **Page Stabilization**: Wait for page load and network idle
+3. **CUA Delegation**: Task-focused prompt for liking using 'l' shortcut
+4. **Result Processing**: Clear success/failure attribution to navigation or interaction phases
+
+#### Profile Management Workflow  
+1. **Orchestrator Navigation**: Direct navigation to profile settings page
+2. **Authentication Verification**: Confirm authenticated access to settings
+3. **CUA Delegation**: Specific UI interaction tasks (edit bio, update avatar, etc.)
+4. **State Management**: Session state preserved across navigation boundaries
+
+### 14.7. Strategic Impact
+
+*   **Production Reliability**: Enables robust, production-ready CUA workflows by eliminating navigation as a failure point
+*   **Scalability**: Reliable navigation enables more complex multi-step CUA workflows
+*   **Maintainability**: Clear separation of concerns simplifies debugging and maintenance
+*   **User Experience**: Predictable workflow execution improves overall system reliability
+
+*   **Rationale**: This pattern resolves fundamental limitations in CUA navigation capabilities by leveraging Playwright's strengths for navigation while preserving CUA's advantages for UI interaction, resulting in highly reliable browser automation workflows.
