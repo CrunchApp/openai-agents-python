@@ -25,7 +25,7 @@ alwaysApply: true
 
 ### 1.2. Naming Conventions
 *   **Modules/Files**: `snake_case.py` (e.g., `x_api_tools.py`).
-*   **Packages/Directories**: `snake_case_directory_names` (e.g., `x_agentic_unit/core/`).
+*   **Packages/Directories**: `snake_case_directory_names` (e.g., `OPENAI-AGENTS-PYTHON-1/core/`).
 *   **Classes**: `PascalCase` (e.g., `OrchestratorAgent`, `XApiTool`).
 *   **Functions & Methods**: `snake_case` (e.g., `post_tweet`, `_handle_api_error`).
 *   **Variables & Attributes**: `snake_case` (e.g., `user_id`, `tweet_text`).

@@ -58,7 +58,7 @@
 The following directory structure reflects the **actual current implementation**. The AI **MUST** use these paths when referencing existing files and follow this structure for new files.
 
 ```
-x_agentic_unit/ (repository root)
+OPENAI-AGENTS-PYTHON-1/ (repository root)
 ├── core/                           # Core infrastructure & utilities
 │   ├── computer_env/               # CUA environment management
 │   │   ├── base.py                 # Base computer interface definitions  

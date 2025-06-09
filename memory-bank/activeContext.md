@@ -9,16 +9,23 @@
 
 ## Active Tasks & Debugging Efforts
 
-### 🔧 CURRENT DEBUGGING: Sprint 2 CUA Issues - Comprehensive Fixes
-*   **Active Testing**: Sprint 2 test sequence in `main.py` covering:
-    1. **CUA Tweet Posting**: Post tweets with emoji handling via `post_tweet_via_cua()`
-    2. **CUA Timeline Reading**: Read home timeline tweets via `get_home_timeline_tweets_via_cua()`  
-    3. **CUA Tweet Replying**: Reply to specific tweets via `reply_to_tweet_via_cua()`
-*   **Status**: **UNDER INTENSIVE DEBUGGING** - Recurring CUA behavioral issues identified
-*   **Latest Comprehensive Fixes Applied**:
-    *   **🔧 Emoji Encoding Enhanced**: Implemented multi-approach Unicode handling with emoji mapping and display references for CUA typing accuracy
-    *   **🔧 Timeline Reading Stabilized**: Added explicit prevention of manual screenshot attempts (Alt+PrintScreen), enhanced navigation instructions, and ESC reset procedures
-    *   **🔧 Reply Posting Restructured**: Comprehensive error recovery with ESC reset instructions, structured step-by-step approach, and improved failure detection
+### 🔧 CURRENT TESTING: CUA Consolidated Timeline Reading Validation
+*   **Active Testing**: Comprehensive CUA timeline reading test in `main.py` covering:
+    1. **CUA Timeline Reading**: Read home timeline tweets via `get_home_timeline_tweets_via_cua()` with viewport displacement fix
+    2. **Viewport Stability**: Test navigation through multiple tweets without viewport shifting
+    3. **Recovery Mechanisms**: Validate automatic detection and recovery from viewport displacement
+    4. **🔧 ROBUST NAVIGATION**: `get_home_timeline_tweets_via_cua_robust()` using individual page navigation strategy
+    5. **🎯 CONSOLIDATED METHOD**: New `get_home_timeline_tweets_via_cua_consolidated()` combining viewport fixes + individual navigation
+*   **Status**: **TESTING THREE APPROACHES** - Comparing viewport fixes vs robust navigation vs consolidated ultimate solution
+*   **Applied Fixes**:
+    *   **🔧 Pre-Viewport Stabilization**: Reset scroll position and zoom before CUA navigation
+    *   **🔧 Displacement Detection**: Automatic detection of viewport shifts during 'j' navigation
+    *   **🔧 Recovery Mechanisms**: Automatic viewport recovery via Home key and page refresh
+    *   **🔧 Enhanced Navigation**: Improved 'j' keypress handling with displacement monitoring
+    *   **🔧 ROBUST STRATEGY**: Individual page navigation (j → ENT → capture → g+h → j) eliminating viewport issues
+    *   **🎯 CONSOLIDATED APPROACH**: Ultimate method combining proven viewport stabilization with robust individual navigation
+    *   **🎯 Enhanced Recovery**: Multi-layer recovery mechanisms with JavaScript + Home key + g+h navigation
+    *   **🎯 Layered Stability**: Pre-stabilization + displacement detection + individual page extraction for maximum reliability
 
 ### 🎯 ACTIVE VALIDATION TASKS
 
@@ -74,19 +81,40 @@
    *   **Issue**: CUA types escaped Unicode sequences (\\\\ud83d\\\\ude80) instead of emoji symbols (🚀)
    *   **Root Cause**: Computer Use Agent model limitation in Unicode handling during type actions
    *   **Fix Applied**: Multi-approach solution with emoji mapping, display references, and explicit typing instructions
-   *   **Status**: **TESTING** - Enhanced Unicode handling with fallback detection
+   *   **Status**: **✅ RESOLVED** - Implemented hybrid strategy with intelligent content routing
 
 2. **🔧 CUA Timeline Reading Confusion**
    *   **Issue**: Agent attempts manual screenshots (Alt+PrintScreen) and terminates prematurely
    *   **Root Cause**: Misinterpretation of screenshot instructions and navigation confusion
    *   **Fix Applied**: Explicit prevention of manual screenshot commands, enhanced navigation guidance, ESC reset procedures
-   *   **Status**: **TESTING** - Restructured timeline reading workflow with error recovery
+   *   **Status**: **🔧 ENHANCED** - Added viewport displacement detection and recovery
 
 3. **🔧 CUA Reply Posting Failures**
    *   **Issue**: Agent gets stuck in reply workflow, tries multiple approaches without success
    *   **Root Cause**: Insufficient error recovery and lack of reset mechanisms when UI state becomes confused
    *   **Fix Applied**: Comprehensive ESC reset instructions, structured step-by-step approach, detailed failure recovery procedures
-   *   **Status**: **TESTING** - Enhanced error handling with autonomous recovery mechanisms
+   *   **Status**: **✅ RESOLVED** - Enhanced error handling with autonomous recovery mechanisms
+
+4. **🔧 CUA Viewport Displacement Issue**
+   *   **Issue**: 'J' keystrokes for tweet navigation cause browser content to shift outside viewport
+   *   **Root Cause**: X.com keyboard navigation causing scroll position instability in Playwright browser
+   *   **Fix Applied**: Pre-viewport stabilization, automatic displacement detection, and recovery mechanisms
+   *   **Status**: **🔧 ACTIVE TESTING** - Comprehensive viewport management system implemented and under validation
+
+5. **🆕 ROBUST NAVIGATION STRATEGY - INDIVIDUAL PAGE APPROACH**
+   *   **Approach**: Enhanced CUA timeline reading using individual tweet page navigation
+   *   **Sequence**: `j → ENT → capture content → g+h → j → repeat`
+   *   **Advantages**: 
+       *   ✅ Eliminates viewport displacement issues entirely
+       *   ✅ Accesses complete tweet content on dedicated pages
+       *   ✅ Stable, consistent page layouts for reliable extraction
+       *   ✅ g+h navigation preserves timeline position
+       *   ✅ Error isolation - navigation failures don't affect entire sequence
+   *   **Trade-offs**:
+       *   ⚠️ Increased network overhead (more page loads)
+       *   ⚠️ Higher complexity in navigation sequence
+       *   ⚠️ Potential for increased detection risk
+   *   **Status**: **🔧 ACTIVE TESTING** - Implementation complete, validation in progress
 
 ### 🔍 MONITORING AREAS
 *   **CUA Session Stability**: Monitor for session invalidation and authentication failures
