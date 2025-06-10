@@ -4,29 +4,30 @@ Module defining a ComputerUseAgent that uses the ComputerTool for CUA tasks.
 
 import logging
 
-from agents import Agent, ModelSettings, ComputerTool
+from agents import Agent, ModelSettings, ComputerTool, function_tool, RunContextWrapper
 from core.computer_env.local_playwright_computer import LocalPlaywrightComputer
-from core.computer_env.base import AsyncComputer
+from core.config import settings
+from core.cua_workflow import CuaWorkflowRunner
+from core.models import CuaTask
+from typing import Any
 
 
 class ComputerUseAgent(Agent):
-    """Agent that controls a browser via the ComputerTool to perform web-based tasks."""
+    """Agent that controls a browser via the ComputerTool for X (Twitter) platform interactions."""
 
-    def __init__(self, computer: AsyncComputer) -> None:
-        """
-        Initialize the ComputerUseAgent with a given AsyncComputer implementation.
-
-        Args:
-            computer: An AsyncComputer implementation for GUI control.
-        """
-        self.computer = computer
+    def __init__(self) -> None:
+        """Initialize the ComputerUseAgent with browser control capabilities."""
+        self.logger = logging.getLogger(__name__)
+        
+        # Initialize the computer environment
+        self.computer = LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir)
+        
         super().__init__(
             name="Computer Use Agent",
             instructions=(
-                "You are an AI assistant that can control a computer browser to perform tasks on web pages, "
-                "specifically for interacting with the X (Twitter) platform. Describe your plan step-by-step. "
-                "Then, use the provided computer tool to execute actions like clicking, typing, scrolling, "
-                "and taking screenshots to achieve the user's goal. Analyze screenshots to determine next steps.\n\n"
+                "You are a Computer Use Agent that executes browser automation tasks for X (Twitter) platform interactions. "
+                "When you receive a handoff, check if there's a structured CuaTask in the context. If so, use the "
+                "execute_cua_task tool to handle it. Otherwise, use the computer tool to respond to natural language instructions."
                 
                 "🎯 CRITICAL: KEYBOARD-FIRST INTERACTION STRATEGY\n"
                 "ALWAYS prioritize keyboard shortcuts over mouse clicks when interacting with X.com. "
@@ -149,4 +150,35 @@ class ComputerUseAgent(Agent):
             model_settings=ModelSettings(truncation="auto"),
             tools=[ComputerTool(computer=self.computer)],
         )
-        self.logger = logging.getLogger(__name__) 
+        
+        # Add the execute_cua_task tool to handle structured CuaTask objects
+        @function_tool(
+            name_override="execute_cua_task", 
+            description_override="Executes a structured CUA task using the centralized workflow runner."
+        )
+        async def _execute_cua_task_tool(ctx: RunContextWrapper[Any], task: CuaTask) -> str:
+            """Tool wrapper for structured CUA task execution."""
+            return await self.execute_cua_task(task)
+        
+        self.tools.append(_execute_cua_task_tool)
+    
+    async def execute_cua_task(self, task: CuaTask) -> str:
+        """Execute a structured CUA task using the centralized workflow runner.
+        
+        Args:
+            task: The CuaTask object containing prompt, start_url, and configuration
+            
+        Returns:
+            String describing the outcome of the CUA operation
+        """
+        self.logger.info(f"ComputerUseAgent executing structured task: {task.prompt[:100]}...")
+        
+        try:
+            runner = CuaWorkflowRunner()
+            result = await runner.run_workflow(task)
+            self.logger.info(f"CUA task completed with result: {result[:200]}...")
+            return result
+        except Exception as e:
+            error_msg = f"CUA task execution failed: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            return f"FAILED: {error_msg}" 

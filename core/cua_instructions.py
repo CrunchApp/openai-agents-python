@@ -648,4 +648,296 @@ RESPONSE FORMATS:
 - 'FAILED: Viewport displacement could not be recovered' (if stabilization failed)
 - 'SESSION_INVALIDATED' (if login screen encountered)
 
-This consolidated approach provides maximum reliability by combining viewport stabilization with individual page navigation for the most robust content extraction possible.""" 
+This consolidated approach provides maximum reliability by combining viewport stabilization with individual page navigation for the most robust content extraction possible."""
+
+def get_search_and_like_tweet_prompt(search_query: str, max_iterations: int = 20) -> str:
+    """Generate comprehensive CUA prompt for searching and liking tweets.
+    
+    This function creates detailed, step-by-step instructions for the CUA to:
+    1. Search for tweets using a specific query
+    2. Evaluate search results for quality
+    3. Select an appropriate tweet to like
+    4. Execute the like action
+    
+    Args:
+        search_query: The search query to use (e.g., '#AI', 'machine learning')
+        max_iterations: Maximum iterations for the CUA workflow
+        
+    Returns:
+        Detailed step-by-step prompt for CUA execution
+    """
+    return f"""🎯 TASK: SEARCH FOR AND LIKE A HIGH-QUALITY TWEET
+
+Your mission: Search X.com for tweets containing '{search_query}', evaluate the results, select one high-quality tweet, and like it.
+
+{CUA_RESET_INSTRUCTIONS}
+
+📋 DETAILED STEP-BY-STEP WORKFLOW:
+
+PHASE 1: SEARCH EXECUTION
+--------------------------
+
+STEP 1 - TAKE INITIAL SCREENSHOT:
+Take a screenshot to see your current page state on X.com.
+
+STEP 2 - INITIATE SEARCH:
+Press '/' (forward slash) to focus the search box.
+Wait 1 second for the search bar to be focused.
+
+STEP 3 - EXECUTE SEARCH:
+Type EXACTLY: {search_query}
+Press 'Enter' to execute the search.
+Wait 2-3 seconds for search results to load.
+
+STEP 4 - VERIFY SEARCH RESULTS:
+Take a screenshot to confirm you see search results.
+You should see a list of tweets related to '{search_query}'.
+
+PHASE 2: TWEET EVALUATION & SELECTION
+-------------------------------------
+
+STEP 5 - EVALUATE FIRST TWEET:
+Look at the first search result tweet. Consider these quality factors:
+- Is it from a legitimate account (has profile picture, reasonable follower count)?
+- Does the tweet content make sense and relate to {search_query}?
+- Is it recent (posted within last few days/weeks)?
+- Does it have some engagement (likes, retweets) indicating it's not spam?
+- Is the content insightful, informative, or adds value to the conversation?
+
+STEP 6 - DECISION POINT:
+If the first tweet meets quality criteria: PROCEED TO LIKE IT (Go to Step 7)
+If the first tweet is low quality: Use 'j' to move to next tweet and re-evaluate
+
+Quality red flags to avoid:
+- Accounts with no profile picture or suspicious usernames
+- Tweets with excessive hashtags or promotional content
+- Very old tweets (older than 1 month)
+- Tweets with zero engagement
+- Spam-like or nonsensical content
+
+STEP 7 - SELECT TWEET TO LIKE:
+Once you've identified a suitable tweet, click on it to open the individual tweet page.
+This is important - you need to be on the specific tweet's page to like it effectively.
+Wait 2 seconds for the page to load.
+
+PHASE 3: LIKE EXECUTION
+-----------------------
+
+STEP 8 - EXECUTE LIKE ACTION:
+Press 'l' (lowercase L) to like the tweet.
+This is X.com's keyboard shortcut for liking.
+Wait 2 seconds for the UI to update.
+
+STEP 9 - VERIFY LIKE SUCCESS:
+Take a final screenshot to confirm the like worked.
+Look for visual confirmation:
+- Heart icon should be filled/colored (usually red)
+- Like count should have increased by 1
+- The heart icon should appear "active" or "selected"
+
+STEP 10 - REPORT RESULT:
+Based on your actions, respond with:
+- 'SUCCESS: Found and liked tweet about {search_query} - [brief description of tweet content]'
+- 'FAILED: Could not find suitable tweet for {search_query} - [reason]'
+- 'SESSION_INVALIDATED' if you encounter login screens
+
+🚨 ERROR HANDLING & FALLBACKS:
+
+Search Issues:
+- If search returns no results: Try a simpler version of the query
+- If search page won't load: Press 'g+h' to go home, then try search again
+
+Tweet Selection Issues:
+- If first 3-5 tweets are all low quality: Report this in your response
+- If you can't determine tweet quality: Choose the most recent one with some engagement
+
+Like Action Issues:
+- If 'l' keyboard shortcut doesn't work: Click the heart icon directly
+- If heart icon is already filled: The tweet is already liked, try the next one
+- If like seems to fail: Take screenshot and report what you observe
+
+Session Issues:
+- If you see any login prompts: Immediately respond with 'SESSION_INVALIDATED'
+- If pages won't load properly: Try refreshing with 'F5' then continue
+
+IMPORTANT REMINDERS:
+- Use keyboard shortcuts whenever possible ('/', 'j', 'l')
+- Take screenshots at key decision points to track progress
+- Focus on quality over speed - better to like one good tweet than like spam
+- If you encounter cookie consent, dismiss it and continue
+- Maximum iterations: {max_iterations} - use them wisely
+
+FINAL RESPONSE FORMAT:
+Provide a clear success/failure message with details about what you accomplished."""
+
+def get_structured_cua_task_prompt(
+    main_objective: str,
+    steps: list,
+    success_criteria: str,
+    fallback_actions: list = None,
+    max_iterations: int = 30
+) -> str:
+    """Generate a structured, step-by-step CUA prompt for complex tasks.
+    
+    This function creates comprehensive prompts that guide the CUA through
+    multi-step workflows with clear objectives, detailed steps, and fallback options.
+    
+    Args:
+        main_objective: Clear statement of what needs to be accomplished
+        steps: List of detailed step descriptions
+        success_criteria: How to determine if the task was successful
+        fallback_actions: Optional list of fallback actions for common issues
+        max_iterations: Maximum iterations for the CUA workflow
+        
+    Returns:
+        Structured prompt with clear phases, steps, and error handling
+    """
+    fallback_section = ""
+    if fallback_actions:
+        fallback_list = "\n".join([f"- {action}" for action in fallback_actions])
+        fallback_section = f"""
+🚨 FALLBACK ACTIONS:
+{fallback_list}
+"""
+    
+    steps_section = ""
+    for i, step in enumerate(steps, 1):
+        steps_section += f"STEP {i}: {step}\n\n"
+    
+    return f"""🎯 MAIN OBJECTIVE: {main_objective}
+
+{CUA_RESET_INSTRUCTIONS}
+
+📋 DETAILED WORKFLOW:
+
+{steps_section}🎯 SUCCESS CRITERIA:
+{success_criteria}
+
+Take a final screenshot to verify completion and respond with:
+- 'SUCCESS: [brief description of what was accomplished]'
+- 'FAILED: [specific reason for failure]'  
+- 'SESSION_INVALIDATED' if you encounter login screens
+
+{fallback_section}
+IMPORTANT REMINDERS:
+- Use keyboard shortcuts whenever possible for better reliability
+- Take screenshots at key decision points to track progress
+- If you encounter cookie consent banners, dismiss them and continue
+- Maximum iterations: {max_iterations} - plan your actions accordingly
+- If you get stuck, use the reset instructions to recover
+
+EXECUTION GUIDELINES:
+- Be methodical: Complete each step before moving to the next
+- Be observant: Take screenshots to verify each action worked
+- Be adaptive: Use fallback actions if primary methods fail
+- Be clear: Provide specific details in your final response"""
+
+def create_smart_cua_task_prompt(task_description: str, context: dict = None) -> tuple:
+    """Intelligently generate a CUA prompt and determine optimal parameters based on task description.
+    
+    This function analyzes the task description and automatically selects the best
+    prompt template and parameters for the CUA to execute the task effectively.
+    
+    Args:
+        task_description: Natural language description of what needs to be done
+        context: Optional context dict with additional parameters
+        
+    Returns:
+        Tuple of (prompt, start_url, max_iterations) optimized for the task
+    """
+    context = context or {}
+    
+    # Normalize the task description
+    task_lower = task_description.lower()
+    
+    # Search and like pattern detection
+    if any(phrase in task_lower for phrase in [
+        "find a tweet", "search for", "look for a tweet", "find and like"
+    ]) and any(phrase in task_lower for phrase in ["like", "heart", "engage"]):
+        
+        # Extract search query from the description
+        search_query = "#AI"  # Default fallback
+        
+        # Try to extract specific hashtags or search terms
+        import re
+        hashtag_match = re.search(r'#\w+', task_description)
+        if hashtag_match:
+            search_query = hashtag_match.group()
+        elif 'about' in task_lower:
+            # Extract text after "about"
+            about_match = re.search(r'about [\'"]?([^\'"\.\,]+)', task_description, re.IGNORECASE)
+            if about_match:
+                search_query = about_match.group(1).strip()
+        
+        prompt = get_search_and_like_tweet_prompt(search_query, max_iterations=30)
+        return prompt, "https://x.com", 30
+    
+    # Direct tweet liking (when URL is provided)
+    elif "like" in task_lower and any(url_indicator in task_lower for url_indicator in [
+        "http", "x.com", "twitter.com", "tweet"
+    ]):
+        # Try to extract URL from context or description
+        tweet_url = context.get('tweet_url', 'https://x.com')
+        if 'http' in task_description:
+            import re
+            url_match = re.search(r'https?://[^\s]+', task_description)
+            if url_match:
+                tweet_url = url_match.group()
+        
+        prompt = get_tweet_like_prompt(tweet_url)
+        return prompt, tweet_url, 20
+    
+    # Timeline reading
+    elif any(phrase in task_lower for phrase in [
+        "read timeline", "browse timeline", "check timeline", "timeline tweets"
+    ]):
+        num_tweets = 5  # Default
+        # Try to extract number
+        import re
+        num_match = re.search(r'(\d+)\s*tweets?', task_description)
+        if num_match:
+            num_tweets = int(num_match.group(1))
+        
+        prompt = get_timeline_reading_prompt(num_tweets)
+        return prompt, "https://x.com", 25
+    
+    # Tweet posting
+    elif any(phrase in task_lower for phrase in [
+        "post tweet", "create tweet", "publish tweet", "send tweet"
+    ]):
+        tweet_text = context.get('tweet_text', 'Hello from AI agent!')
+        prompt = get_tweet_posting_prompt(tweet_text)
+        return prompt, "https://x.com", 15
+    
+    # Search functionality
+    elif any(phrase in task_lower for phrase in [
+        "search for", "find tweets about", "search x", "look up"
+    ]):
+        query = context.get('search_query', 'AI')
+        num_results = context.get('num_results', 5)
+        prompt = get_search_x_prompt(query, num_results)
+        return prompt, "https://x.com", 20
+    
+    # Fallback: Create a generic structured task
+    else:
+        steps = [
+            "Take a screenshot to see current page state",
+            "Navigate to the appropriate page if needed",
+            "Execute the requested action using keyboard shortcuts when possible",
+            "Verify the action was successful",
+            "Take a final screenshot for confirmation"
+        ]
+        
+        prompt = get_structured_cua_task_prompt(
+            main_objective=task_description,
+            steps=steps,
+            success_criteria="The requested action was completed successfully",
+            fallback_actions=[
+                "Use mouse clicks if keyboard shortcuts fail",
+                "Refresh the page (F5) if it becomes unresponsive",
+                "Navigate to home page (g+h) and retry if lost"
+            ],
+            max_iterations=25
+        )
+        
+        return prompt, "https://x.com", 25 

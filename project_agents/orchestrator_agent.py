@@ -3,103 +3,13 @@
 import asyncio
 import json
 import logging
-import re
 from typing import Any
 
-from agents import Agent, ModelSettings, RunContextWrapper, function_tool, Runner, ComputerTool
+from agents import Agent, RunContextWrapper, function_tool, Runner, handoff
 from agents.mcp.server import MCPServerStdio
 from core.config import settings
-from core.constants import (
-    COMPLETED_PREFIX,
-    CUA_DISPLAY_WIDTH,
-    CUA_DISPLAY_HEIGHT,
-    CUA_ENVIRONMENT,
-    CUA_MAX_ITERATIONS_DEFAULT,
-    CUA_MAX_ITERATIONS_REPLY,
-    CUA_MAX_ITERATIONS_LIKE,
-    CUA_MAX_ITERATIONS_ROBUST_TIMELINE,
-    SCREENSHOT_MIN_SIZE_THRESHOLD,
-    CONSECUTIVE_EMPTY_SCREENSHOT_LIMIT,
-    PAGE_NAVIGATION_TIMEOUT,
-    PAGE_STABILIZATION_DELAY,
-    UI_RESPONSE_DELAY,
-    FOCUS_TRANSITION_DELAY,
-    CLICK_RESPONSE_DELAY,
-    KEYPRESS_RESPONSE_DELAY,
-    SCROLL_RESPONSE_DELAY,
-    UNICODE_THRESHOLD,
-    LOG_TEXT_SHORT,
-    LOG_TEXT_MEDIUM,
-    LOG_TEXT_LONG,
-    LOG_TEXT_EXTENDED,
-    COMPUTER_USE_MODEL,
-    ORCHESTRATOR_MODEL,
-    SUCCESS_PREFIX,
-    FAILED_PREFIX,
-    SESSION_INVALIDATED,
-    X_SHORTCUT_HOME,
-    X_SHORTCUT_COMPOSE,
-    X_SHORTCUT_SEND_POST,
-    X_SHORTCUT_LIKE,
-    X_SHORTCUT_REPLY,
-    X_SHORTCUT_ENTER,
-    X_SHORTCUT_NEXT_POST,
-    EMOJI_MAPPINGS,
-    CUA_TOOL_CONFIG,
-    X_HOME_URL,
-    TWEET_URL_PATTERN,
-    RESPONSE_TYPE_COMPUTER_CALL,
-    RESPONSE_TYPE_TEXT,
-    RESPONSE_TYPE_MESSAGE,
-    RESPONSE_TYPE_REASONING,
-    API_TRUNCATION_AUTO,
-    API_ROLE_SYSTEM,
-    API_ROLE_USER,
-    CONTENT_TYPE_COMPUTER_CALL_OUTPUT,
-    CONTENT_TYPE_INPUT_IMAGE,
-    SAFETY_CHECK_ID,
-    SAFETY_CHECK_CODE,
-    SAFETY_CHECK_MESSAGE,
-    SUCCESS_MESSAGE_TWEETS_EXTRACTED,
-    COMPLETED_CUA_WORKFLOW,
-    COMPLETED_CUA_ITERATIONS,
-    TEXT_PARSING_START_MARKER,
-    TEXT_PARSING_QUOTE_OFFSET,
-    IMAGE_DATA_URL_PREFIX,
-    VIEWPORT_DISPLACEMENT_RATIO_THRESHOLD,
-    PAGE_RELOAD_WAIT_SECONDS,
-    DEFAULT_TIMELINE_TWEET_COUNT,
-    COMPLETED_CUA_LATEST_TWEET_READING,
-    SUCCESS_MESSAGE_TWEET_TEXT_EXTRACTED,
-    RESPONSE_TEXT_SLICE_SHORT,
-    RESPONSE_TEXT_SLICE_MEDIUM,
-    TEXT_PARSING_QUOTE_START,
-    TEXT_PARSING_QUOTE_END,
-    SUCCESS_STRING_LITERAL,
-    FAILED_STRING_LITERAL,
-    SESSION_INVALIDATED_STRING_LITERAL,
-    COMPLETED_STRING_LITERAL,
-    COMPLETED_CUA_WORKFLOW_TEXT,
-    SUCCESS_REPLY_POSTED_FROM_REASONING,
-    SUCCESS_TWEET_LIKED_FROM_REASONING,
-    COMPLETED_CUA_TWEET_LIKING_WORKFLOW_TEXT,
-)
-from core.cua_instructions import (
-    CUA_SYSTEM_INSTRUCTIONS,
-    CUA_RESET_INSTRUCTIONS,
-    CUA_UNICODE_HANDLING_INSTRUCTIONS,
-    CUA_RESPONSE_FORMATS,
-    get_tweet_posting_prompt,
-    get_tweet_reply_prompt,
-    get_tweet_like_prompt,
-    get_tweet_repost_prompt,
-    get_user_follow_prompt,
-    get_search_x_prompt,
-    get_timeline_reading_prompt,
-    get_latest_tweet_reading_prompt,
-    get_robust_timeline_reading_prompt,
-    get_consolidated_timeline_reading_prompt,
-)
+from core.models import CuaTask
+from core.cua_instructions import get_tweet_like_prompt
 from core.db_manager import (
     get_agent_state,
     get_approved_reply_tasks,
@@ -107,10 +17,10 @@ from core.db_manager import (
     update_human_review_status,
 )
 from core.oauth_manager import OAuthError
-from core.computer_env.local_playwright_computer import LocalPlaywrightComputer
 from project_agents.content_creation_agent import ContentCreationAgent
 from project_agents.research_agent import ResearchAgent
 from project_agents.x_interaction_agent import XInteractionAgent
+from project_agents.computer_use_agent import ComputerUseAgent
 from tools.human_handoff_tool import _request_human_review_impl as call_request_human_review, DraftedReplyData
 from tools.x_api_tools import XApiError, get_mentions, post_text_tweet as _post_text_tweet
 from tools.memory_tools import (
@@ -133,8 +43,9 @@ class OrchestratorAgent(Agent):
         self.content_creation_agent = ContentCreationAgent()
         self.research_agent = ResearchAgent()
         self.x_interaction_agent = XInteractionAgent()
+        self.computer_use_agent = ComputerUseAgent()
 
-        # Initialize the Supabase MCP Server connection
+        # Initialize the Supabase MCP Server configuration (connection will be managed per-request)
         self.supabase_mcp_server = MCPServerStdio(
             params={
                 "command": "cmd",
@@ -155,6 +66,15 @@ class OrchestratorAgent(Agent):
 
         super().__init__(
             name="Orchestrator Agent",
+            handoffs=[
+                handoff(
+                    agent=self.computer_use_agent,
+                    tool_name_override="execute_cua_task",
+                    input_type=CuaTask,
+                    on_handoff=self._on_cua_handoff,
+                    tool_description_override="Delegates a specific browser automation task to the ComputerUseAgent. Use this for all UI interactions like posting, liking, replying, timeline reading, search, etc. Provide a structured CuaTask with prompt, optional start_url, and max_iterations."
+                )
+            ],
             instructions=(
                 "You are 'AIified', a sophisticated AI agent managing an X.com account. Your primary objective is to autonomously grow the account by maximizing meaningful engagement within the AI, LLM, and Machine Learning communities. You must be professional, insightful, and helpful.\n\n"
                 
@@ -162,20 +82,22 @@ class OrchestratorAgent(Agent):
                 
                 "--- ACTION MENU ---\n"
                 "1. **Content Research & Curation:** Use the `enhanced_research_with_memory` tool to find new, interesting topics. This is a good default action if you have no other high-priority tasks. Query ideas: 'latest breakthroughs in generative AI', 'new open source LLMs', 'AI ethics discussions'.\n"
-                "2. **Post New Content:** Use the `get_unused_content_ideas` tool to see if you have a backlog of good ideas. If you find a promising idea, use the ContentCreationAgent (internally) to draft a tweet, send it for HIL review, and if approved, it will be posted later. (Note: The `post_tweet_via_cua` tool is for direct posting, which you should only use for pre-approved content).\n"
-                "3. **Engage with Timeline:** Read your home timeline to find relevant tweets from accounts you follow. Use the `enhanced_like_tweet_with_memory` tool to engage with a high-quality tweet. You can also use this to find tweets to reply to.\n"
-                "4. **Check for Mentions & High-Value Replies:** Check your own mentions for opportunities to engage. (Note: You can use API or CUA tools for this).\n"
-                "5. **Expand Network:** Use the `search_x_for_topic_via_cua` tool to find active conversations. Based on the results, you can decide to follow insightful users or engage with a relevant public tweet.\n\n"
+                "2. **Post New Content:** Use the `get_unused_content_ideas` tool to see if you have a backlog of good ideas. If you find a promising idea, use the ContentCreationAgent (internally) to draft a tweet, send it for HIL review, and if approved, use the `execute_cua_task` tool to post it.\n"
+                "3. **Engage with Timeline:** Use the `execute_cua_task` tool to read your home timeline and find relevant tweets. Use the `enhanced_like_tweet_with_memory` tool to engage with high-quality tweets with memory-driven spam prevention.\n"
+                "4. **Check for Mentions & High-Value Replies:** Check your own mentions for opportunities to engage using the `process_new_mentions` tool.\n"
+                "5. **Expand Network:** Use the `execute_cua_task` tool to search X for active conversations. Based on the results, you can decide to follow insightful users or engage with relevant public tweets.\n\n"
                 
                 "--- STRATEGIC RULES ---\n"
                 "- **MEMORY FIRST:** Before taking any engagement action (like, reply, follow), you MUST use the `check_recent_actions` tool to ensure you haven't interacted with that same tweet or user recently. This prevents spammy behavior.\n"
                 "- **PRIORITIZE:** High-quality replies to mentions are often more valuable than liking a random tweet. If you have pending content ideas, drafting a new post is a high-value action.\n"
                 "- **BE CONCISE:** When using tools, provide clear and concise inputs. For example, for `enhanced_research_with_memory`, provide a specific query like 'What is retrieval-augmented generation?'.\n"
-                "- **DOCUMENTATION:** After every major action, think about what should be logged to your memory for future reference."
+                "- **DOCUMENTATION:** After every major action, think about what should be logged to your memory for future reference.\n"
+                "- **CUA TASKS:** For browser automation tasks, use the `execute_cua_task` tool with appropriate CuaTask parameters including prompt, start_url (optional), and max_iterations."
             ),
-            model=ORCHESTRATOR_MODEL,
+            model="o4-mini",
             tools=[],
-            mcp_servers=[self.supabase_mcp_server],
+            # Remove MCP servers from agent initialization - will be handled per-request
+            # mcp_servers=[self.supabase_mcp_server],
         )
 
         # Expose process_new_mentions_workflow as a tool for LLM-driven orchestration
@@ -211,11 +133,17 @@ class OrchestratorAgent(Agent):
         # Add memory-driven decision tools
         @function_tool(
             name_override="enhanced_like_tweet_with_memory",
-            description_override="Like a tweet with memory-driven spam prevention. Checks recent interactions to avoid overengaging with the same target.",
+            description_override="Like a tweet with memory-driven spam prevention. Checks recent interactions to avoid overengaging with the same target. Returns a CuaTask for execution.",
         )
         async def _enhanced_like_tweet_with_memory_tool(ctx: RunContextWrapper[Any], tweet_url: str) -> str:
             """Tool wrapper for enhanced tweet liking with memory."""
-            return await self._enhanced_like_tweet_with_memory(tweet_url)
+            task = await self._enhanced_like_tweet_with_memory(tweet_url)
+            if isinstance(task, CuaTask):
+                # Task is ready for handoff - convert to instructions for LLM
+                return f"Memory check passed. Ready to execute CUA task: Use execute_cua_task with prompt='{task.prompt}', start_url='{task.start_url}', max_iterations={task.max_iterations}"
+            else:
+                # Task was skipped due to memory check
+                return str(task)
 
         @function_tool(
             name_override="enhanced_research_with_memory",
@@ -249,6 +177,46 @@ class OrchestratorAgent(Agent):
             _get_unused_content_ideas_tool,
             _check_recent_actions_tool,
         ])
+
+        # Add smart CUA task creation tool
+        @function_tool(
+            name_override="create_smart_cua_task",
+            description_override="Create an intelligently structured CUA task with optimized prompts and parameters. Automatically analyzes task description and generates appropriate step-by-step instructions for the ComputerUseAgent.",
+        )
+        async def _create_smart_cua_task_tool(ctx: RunContextWrapper[Any], task_description: str) -> str:
+            """Tool wrapper for smart CUA task creation."""
+            return await self._create_smart_cua_task(task_description, {})
+
+        self.tools.append(_create_smart_cua_task_tool)
+        
+    async def _on_cua_handoff(self, ctx: RunContextWrapper[Any], task: CuaTask) -> None:
+        """Handle handoff to ComputerUseAgent with CuaTask data.
+        
+        This callback is executed when the LLM calls the execute_cua_task handoff.
+        It prepares the context and instructions for the ComputerUseAgent.
+        
+        Args:
+            ctx: The run context wrapper
+            task: The validated CuaTask object from the LLM
+        """
+        self.logger.info(f"CUA handoff received: {task.prompt[:100]}...")
+        
+        # Store the task directly in the context - the ComputerUseAgent
+        # will handle execution through its execute_cua_task tool
+        ctx.cua_task = task
+        
+        # Create a clear instruction for the ComputerUseAgent
+        instruction = f"""EXECUTE CUA TASK:
+
+Task Summary: {task.prompt[:200]}{'...' if len(task.prompt) > 200 else ''}
+
+The task details are provided as a CuaTask object. Use your execute_cua_task tool to process this structured task."""
+        
+        ctx.cua_instruction = instruction.strip()
+        
+        # Log the handoff details
+        self.logger.info(f"CUA task handoff - Max iterations: {task.max_iterations}, Start URL: {task.start_url}")
+        self.logger.info("Handoff callback completed - ComputerUseAgent will execute the task")
 
     def run_simple_post_workflow(self, content: str) -> None:
         """Run a simple workflow that posts content to X via direct tool call."""
@@ -293,7 +261,7 @@ class OrchestratorAgent(Agent):
             return result
         except Exception as e:
             self.logger.error(f"Orchestrator: Research failed: {e}", exc_info=True)
-            return f"{FAILED_PREFIX}: Research query '{query}' failed."
+            return f"FAILED: Research query '{query}' failed."
 
     async def _internal_research_with_params(self, query: str) -> str:
         """Internal async research method that can be called from other async contexts.
@@ -320,2093 +288,7 @@ class OrchestratorAgent(Agent):
             return result
         except Exception as e:
             self.logger.error(f"Orchestrator: Async research failed: {e}", exc_info=True)
-            return f"{FAILED_PREFIX}: Research query '{query}' failed."
-
-    def get_latest_own_tweet_text_via_cua(self) -> str:
-        """
-        Retrieve the text content of the latest tweet from the agent's own X.com profile using browser automation.
-
-        Returns:
-            String describing the outcome of the CUA operation and extracted tweet text if successful.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting CUA latest tweet reading workflow")
-        
-        async def _internal_get_latest_tweet() -> str:
-            """Internal async function to handle CUA latest tweet reading workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Rationale for direct OpenAI client.responses.create usage for CUA tasks:
-                    # While the agents.Runner can run an Agent (like ComputerUseAgent) with ComputerTool,
-                    # directly interacting with client.responses.create provides finer-grained control.
-                    # This direct approach allows for:
-                    # 1. Precise management of the CUA interaction loop (screenshot -> action -> next prompt).
-                    # 2. Explicit handling and automatic acknowledgment of `pending_safety_checks`,
-                    #    which is crucial for autonomous operation and compliance.
-                    # 3. Immediate detection and branching logic for specific CUA outcomes like `SESSION_INVALIDATED`
-                    #    or detailed `FAILED` states, allowing the Orchestrator to react promptly without
-                    #    waiting for the entire ComputerUseAgent run to complete and return a single result.
-                    # This direct control enhances reliability and enables more robust error handling
-                    # tailored to the X.com CUA workflows.
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # Define task-specific prompt (latest tweet reading)
-                    task_specific_prompt = get_latest_tweet_reading_prompt()
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for latest tweet reading")
-                    initial_input_messages = [
-                        {"role": API_ROLE_SYSTEM, "content": system_instructions},
-                        {"role": API_ROLE_USER, "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation=API_TRUNCATION_AUTO
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_DEFAULT
-                    iteration = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == RESPONSE_TYPE_COMPUTER_CALL]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == RESPONSE_TYPE_TEXT and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:LOG_TEXT_LONG]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:LOG_TEXT_MEDIUM]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == RESPONSE_TYPE_TEXT]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == RESPONSE_TYPE_REASONING]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == RESPONSE_TYPE_MESSAGE]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_PREFIX in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED in final_text:
-                                    return final_text
-                                elif FAILED_PREFIX in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if TEXT_PARSING_START_MARKER in msg_str:
-                                            start = msg_str.find(TEXT_PARSING_START_MARKER) + TEXT_PARSING_QUOTE_OFFSET
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_PREFIX in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_PREFIX in final_message:
-                                    return final_text
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:LOG_TEXT_EXTENDED]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_PREFIX in final_reasoning:
-                                    return SUCCESS_MESSAGE_TWEET_TEXT_EXTRACTED
-                                elif SESSION_INVALIDATED in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_PREFIX in final_reasoning:
-                                    return final_text
-                        
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return COMPLETED_CUA_LATEST_TWEET_READING
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media reading checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media reading safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    SAFETY_CHECK_ID: check.id,
-                                    SAFETY_CHECK_CODE: check.code,
-                                    SAFETY_CHECK_MESSAGE: check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"{FAILED_PREFIX}: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": CONTENT_TYPE_COMPUTER_CALL_OUTPUT,
-                            "output": {
-                                "type": CONTENT_TYPE_INPUT_IMAGE,
-                                "image_url": f"{IMAGE_DATA_URL_PREFIX},{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation=API_TRUNCATION_AUTO
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA latest tweet reading failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_get_latest_tweet())
-        except Exception as e:
-            error_msg = f"Failed to execute CUA latest tweet reading workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def post_tweet_via_cua(self, tweet_text: str) -> str:
-        """
-        Post a tweet via the ComputerUseAgent using browser automation.
-
-        Args:
-            tweet_text: The exact text content to post as a tweet.
-
-        Returns:
-            String describing the outcome of the CUA operation.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting CUA tweet posting workflow for text: %s", tweet_text[:LOG_TEXT_SHORT] + "..." if len(tweet_text) > LOG_TEXT_SHORT else tweet_text)
-        
-        async def _internal_post_via_cua() -> str:
-            """Internal async function to handle CUA posting workflow with safety check support."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Rationale for direct OpenAI client.responses.create usage for CUA tasks:
-                    # While the agents.Runner can run an Agent (like ComputerUseAgent) with ComputerTool,
-                    # directly interacting with client.responses.create provides finer-grained control.
-                    # This direct approach allows for:
-                    # 1. Precise management of the CUA interaction loop (screenshot -> action -> next prompt).
-                    # 2. Explicit handling and automatic acknowledgment of `pending_safety_checks`,
-                    #    which is crucial for autonomous operation and compliance.
-                    # 3. Immediate detection and branching logic for specific CUA outcomes like `SESSION_INVALIDATED`
-                    #    or detailed `FAILED` states, allowing the Orchestrator to react promptly without
-                    #    waiting for the entire ComputerUseAgent run to complete and return a single result.
-                    # This direct control enhances reliability and enables more robust error handling
-                    # tailored to the X.com CUA workflows.
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # CRITICAL FIX: Enhanced Unicode handling approach
-                    # Since CUA appears to escape Unicode during typing, try alternative approaches
-                    clean_tweet_text = tweet_text
-                    
-                    # For CUA, we'll provide both the original text and emoji descriptions
-                    # to help the agent understand what should be typed
-                    cua_display_text = clean_tweet_text
-                    for emoji, description in EMOJI_MAPPINGS.items():
-                        if emoji in clean_tweet_text:
-                            cua_display_text = cua_display_text.replace(emoji, f" {description} ")
-                    
-                    # Define task-specific prompt (tweet posting)
-                    task_specific_prompt = get_tweet_posting_prompt(clean_tweet_text)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request")
-                    initial_input_messages = [
-                        {"role": API_ROLE_SYSTEM, "content": system_instructions},
-                        {"role": API_ROLE_USER, "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation=API_TRUNCATION_AUTO
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_DEFAULT
-                    iteration = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == RESPONSE_TYPE_COMPUTER_CALL]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == RESPONSE_TYPE_TEXT and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:LOG_TEXT_LONG]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:LOG_TEXT_MEDIUM]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == RESPONSE_TYPE_TEXT]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == RESPONSE_TYPE_REASONING]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == RESPONSE_TYPE_MESSAGE]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_PREFIX in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED in final_text:
-                                    return final_text
-                                elif FAILED_PREFIX in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_PREFIX in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_PREFIX in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:LOG_TEXT_EXTENDED]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_PREFIX in final_reasoning:
-                                    return f"{SUCCESS_PREFIX}: Tweet posted successfully (from reasoning)"
-                                elif SESSION_INVALIDATED in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_PREFIX in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:LOG_TEXT_LONG]}"
-                            
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return "COMPLETED: CUA workflow finished"
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - this is the key fix!
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # According to our project brief and memory bank, we should automatically acknowledge 
-                            # routine social media posting safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"{FAILED_PREFIX}: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": CONTENT_TYPE_COMPUTER_CALL_OUTPUT,
-                            "output": {
-                                "type": CONTENT_TYPE_INPUT_IMAGE,
-                                "image_url": f"{IMAGE_DATA_URL_PREFIX},{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation="auto"
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA tweet posting failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_post_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute CUA tweet posting workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def reply_to_tweet_via_cua(self, tweet_url: str, reply_text: str) -> str:
-        """
-        Reply to a specific tweet via the ComputerUseAgent using browser automation.
-
-        Args:
-            tweet_url: The URL of the tweet to reply to.
-            reply_text: The exact text content to post as a reply.
-
-        Returns:
-            String describing the outcome of the CUA operation.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting CUA tweet reply workflow for URL: %s", tweet_url)
-        self.logger.info("Reply text: %s", reply_text[:LOG_TEXT_MEDIUM] + "..." if len(reply_text) > LOG_TEXT_MEDIUM else reply_text)
-        
-        async def _internal_reply_via_cua() -> str:
-            """Internal async function to handle CUA tweet reply workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # Navigate directly to the tweet URL using Playwright before starting CUA
-                    self.logger.info(f"🧭 Direct navigation to tweet URL: {tweet_url}")
-                    try:
-                        await computer.page.goto(tweet_url, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
-                        await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)  # Additional wait for page stabilization
-                        self.logger.info(f"✅ Successfully navigated to {tweet_url}")
-                    except Exception as nav_error:
-                        self.logger.error(f"❌ Failed to navigate to {tweet_url}: {nav_error}")
-                        return f"{FAILED_PREFIX}: Could not navigate to tweet URL - {nav_error}"
-                    
-                    # Define task-specific prompt (tweet replying)
-                    task_specific_prompt = get_tweet_reply_prompt(tweet_url, reply_text)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for tweet replying")
-                    initial_input_messages = [
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation="auto"
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_REPLY
-                    iteration = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == "text" and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:200]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_PREFIX in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED in final_text:
-                                    return final_text
-                                elif FAILED_PREFIX in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_reasoning:
-                                    return SUCCESS_REPLY_POSTED_FROM_REASONING
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                            
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return COMPLETED_CUA_WORKFLOW_TEXT
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media interaction checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"FAILED: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": CONTENT_TYPE_COMPUTER_CALL_OUTPUT,
-                            "output": {
-                                "type": CONTENT_TYPE_INPUT_IMAGE,
-                                "image_url": f"{IMAGE_DATA_URL_PREFIX},{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation=API_TRUNCATION_AUTO
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA tweet reply failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_reply_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute CUA tweet reply workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def get_home_timeline_tweets_via_cua(self, num_tweets: int = DEFAULT_TIMELINE_TWEET_COUNT) -> str:
-        """
-        Read the text content of multiple tweets from the home timeline via CUA.
-
-        Args:
-            num_tweets: Number of tweets to read from the top of the timeline (default: 3).
-
-        Returns:
-            JSON string containing the list of tweet texts, or error message.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting CUA home timeline reading workflow for %d tweets", num_tweets)
-        
-        async def _internal_timeline_via_cua() -> str:
-            """Internal async function to handle CUA timeline reading workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # =================================================================
-                    # 🔧 LAYER 1: PRE-VIEWPORT STABILIZATION (CRITICAL FIX)
-                    # =================================================================
-                    self.logger.info("🔧 Starting Layer 1: Pre-viewport stabilization before CUA navigation")
-                    
-                    try:
-                        # Step 1: Reset scroll position to top
-                        self.logger.info("📐 Resetting scroll position to top")
-                        await computer.page.evaluate("window.scrollTo(0, 0);")
-                        await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                        
-                        # Step 2: Ensure consistent zoom level (100%)
-                        self.logger.info("🔍 Setting zoom level to 100%")
-                        await computer.page.evaluate("document.body.style.zoom = '1.0';")
-                        await asyncio.sleep(KEYPRESS_RESPONSE_DELAY / 1000)
-                        
-                        # Step 3: Add viewport stabilization CSS to prevent displacement
-                        self.logger.info("🎯 Adding viewport stabilization CSS")
-                        stabilization_css = """
-                        body { 
-                            overflow-x: hidden !important;
-                            position: relative !important;
-                        }
-                        html {
-                            scroll-behavior: auto !important;
-                        }
-                        [data-testid="primaryColumn"] {
-                            position: relative !important;
-                            transform: none !important;
-                        }
-                        """
-                        await computer.page.add_style_tag(content=stabilization_css)
-                        await asyncio.sleep(KEYPRESS_RESPONSE_DELAY / 1000)
-                        
-                        # Step 4: Force layout recalculation
-                        self.logger.info("⚡ Forcing layout recalculation")
-                        await computer.page.evaluate("""
-                            // Force layout recalculation
-                            document.body.offsetHeight;
-                            window.getComputedStyle(document.body).getPropertyValue('height');
-                            // Ensure we're at the top of the page
-                            window.scrollTo({top: 0, left: 0, behavior: 'auto'});
-                        """)
-                        await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                        
-                        # Step 5: Navigate to home timeline if not already there
-                        current_url = computer.page.url
-                        if not current_url.endswith('/home'):
-                            self.logger.info("🧭 Navigating to home timeline for stable starting point")
-                            await computer.page.goto(X_HOME_URL, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
-                            await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)
-                            
-                            # Re-apply stabilization after navigation
-                            await computer.page.evaluate("window.scrollTo(0, 0);")
-                            await computer.page.add_style_tag(content=stabilization_css)
-                            await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                        
-                        self.logger.info("✅ Layer 1: Viewport stabilization completed successfully")
-                        
-                    except Exception as stabilization_error:
-                        self.logger.warning(f"⚠️ Viewport stabilization failed (proceeding anyway): {stabilization_error}")
-                    
-                    # =================================================================
-                    # End of Layer 1 Viewport Stabilization
-                    # =================================================================
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # Define task-specific prompt (timeline reading) with enhanced viewport management
-                    task_specific_prompt = get_timeline_reading_prompt(num_tweets)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for timeline reading")
-                    initial_input_messages = [
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation="auto"
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_DEFAULT
-                    iteration = 0
-                    last_screenshot_size = 0
-                    consecutive_empty_screenshots = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == "text" and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:200]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif FAILED_STRING_LITERAL in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_reasoning:
-                                    return SUCCESS_MESSAGE_TWEETS_EXTRACTED
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                            
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return COMPLETED_CUA_WORKFLOW_TEXT
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media interaction checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"FAILED: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                            screenshot_size = len(screenshot_b64)
-                            
-                            # CRITICAL FIX: Detect and handle blank/problematic screenshots
-                            self.logger.info(f"Screenshot size: {screenshot_size} characters")
-                            
-                            # Check for consistently small screenshots (blank page indicator)
-                            if screenshot_size < SCREENSHOT_MIN_SIZE_THRESHOLD:  # Typical X.com screenshots are much larger
-                                consecutive_empty_screenshots += 1
-                                self.logger.warning(f"Small screenshot detected ({screenshot_size} chars). Count: {consecutive_empty_screenshots}")
-                                
-                                # If we get multiple small screenshots, the page is likely in a bad state
-                                if consecutive_empty_screenshots >= CONSECUTIVE_EMPTY_SCREENSHOT_LIMIT:
-                                    self.logger.error("Multiple consecutive small screenshots - page appears blank or broken")
-                                    
-                                    # Attempt recovery by refreshing the page
-                                    try:
-                                        self.logger.info("Attempting page refresh recovery")
-                                        await computer.keypress(['CTRL', 'R'])
-                                        await asyncio.sleep(PAGE_RELOAD_WAIT_SECONDS)  # Wait for page reload
-                                        
-                                        # Take a new screenshot to check if recovery worked
-                                        recovery_screenshot = await computer.screenshot()
-                                        recovery_size = len(recovery_screenshot)
-                                        self.logger.info(f"Recovery screenshot size: {recovery_size} characters")
-                                        
-                                        if recovery_size > SCREENSHOT_MIN_SIZE_THRESHOLD:
-                                            self.logger.info("Page refresh recovery successful")
-                                            screenshot_b64 = recovery_screenshot
-                                            consecutive_empty_screenshots = 0
-                                        else:
-                                            self.logger.error("Page refresh recovery failed - still getting small screenshots")
-                                            return "FAILED: Page appears blank and recovery attempts failed"
-                                    except Exception as recovery_error:
-                                        self.logger.error(f"Recovery attempt failed: {recovery_error}")
-                                        return "FAILED: Page refresh recovery failed"
-                            else:
-                                consecutive_empty_screenshots = 0  # Reset counter on good screenshot
-                            
-                            last_screenshot_size = screenshot_size
-                            
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": CONTENT_TYPE_COMPUTER_CALL_OUTPUT,
-                            "output": {
-                                "type": CONTENT_TYPE_INPUT_IMAGE,
-                                "image_url": f"{IMAGE_DATA_URL_PREFIX},{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation=API_TRUNCATION_AUTO
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA timeline reading failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_timeline_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute CUA timeline reading workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def like_tweet_via_cua(self, tweet_url: str) -> str:
-        """
-        Like a specific tweet via the ComputerUseAgent using browser automation.
-
-        Args:
-            tweet_url: The URL of the tweet to like.
-
-        Returns:
-            String describing the outcome of the CUA operation.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting CUA tweet liking workflow for URL: %s", tweet_url)
-        
-        async def _internal_like_via_cua() -> str:
-            """Internal async function to handle CUA tweet liking workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # Navigate directly to the tweet URL using Playwright before starting CUA
-                    self.logger.info(f"🧭 Direct navigation to tweet URL: {tweet_url}")
-                    try:
-                        await computer.page.goto(tweet_url, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
-                        await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)  # Additional wait for page stabilization
-                        self.logger.info(f"✅ Successfully navigated to {tweet_url}")
-                    except Exception as nav_error:
-                        self.logger.error(f"❌ Failed to navigate to {tweet_url}: {nav_error}")
-                        return f"{FAILED_PREFIX}: Could not navigate to tweet URL - {nav_error}"
-                    
-                    # Define task-specific prompt (tweet liking) - now focused on just liking since we're already on the page
-                    task_specific_prompt = get_tweet_like_prompt(tweet_url)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for tweet liking")
-                    initial_input_messages = [
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation="auto"
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_LIKE
-                    iteration = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == "text" and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:200]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif FAILED_STRING_LITERAL in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_reasoning:
-                                    return SUCCESS_TWEET_LIKED_FROM_REASONING
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                            
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return COMPLETED_CUA_TWEET_LIKING_WORKFLOW_TEXT
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media interaction checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"FAILED: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": "computer_call_output",
-                            "output": {
-                                "type": "input_image",
-                                "image_url": f"data:image/png;base64,{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation="auto"
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA tweet liking failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_like_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute CUA tweet liking workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    async def _internal_like_via_cua_with_params(self, tweet_url: str) -> str:
-        """Internal async function to handle CUA tweet liking workflow with parameters.
-        
-        This is a standalone async method that can be called from other async contexts
-        without triggering nested event loop issues.
-        
-        Args:
-            tweet_url: The URL of the tweet to like
-            
-        Returns:
-            String describing the outcome of the CUA operation
-        """
-        self.logger.info("Starting async CUA tweet liking workflow for URL: %s", tweet_url)
-        
-        try:
-            # Use LocalPlaywrightComputer with proper configuration
-            async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                
-                # Initialize the OpenAI client for direct responses API calls
-                from openai import OpenAI
-                import base64
-                client = OpenAI(api_key=settings.openai_api_key)
-                
-                # Navigate directly to the tweet URL using Playwright before starting CUA
-                self.logger.info(f"🧭 Direct navigation to tweet URL: {tweet_url}")
-                try:
-                    await computer.page.goto(tweet_url, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
-                    await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)  # Additional wait for page stabilization
-                    self.logger.info(f"✅ Successfully navigated to {tweet_url}")
-                except Exception as nav_error:
-                    self.logger.error(f"❌ Failed to navigate to {tweet_url}: {nav_error}")
-                    return f"{FAILED_PREFIX}: Could not navigate to tweet URL - {nav_error}"
-                
-                # Define task-specific prompt (tweet liking) - now focused on just liking since we're already on the page
-                task_specific_prompt = get_tweet_like_prompt(tweet_url)
-                
-                # Initial request to get first screenshot
-                self.logger.info("Sending initial CUA request for tweet liking")
-                initial_input_messages = [
-                    {"role": "system", "content": CUA_SYSTEM_INSTRUCTIONS},
-                    {"role": "user", "content": task_specific_prompt}
-                ]
-                response = client.responses.create(
-                    model=COMPUTER_USE_MODEL,
-                    tools=[CUA_TOOL_CONFIG],
-                    input=initial_input_messages,
-                    truncation="auto"
-                )
-                
-                max_iterations = CUA_MAX_ITERATIONS_LIKE
-                iteration = 0
-                
-                while iteration < max_iterations:
-                    iteration += 1
-                    self.logger.info(f"CUA iteration {iteration}")
-                    
-                    # Check for computer calls in the response
-                    computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                    
-                    # Debug: Log all response output items
-                    self.logger.info(f"Response output items: {len(response.output)}")
-                    for i, item in enumerate(response.output):
-                        if hasattr(item, 'type'):
-                            self.logger.info(f"  Item {i}: type={item.type}")
-                            if item.type == "text" and hasattr(item, 'text'):
-                                self.logger.info(f"    Text content: {item.text[:200]}...")
-                        else:
-                            self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                    
-                    if not computer_calls:
-                        # Check for text output that might contain our success/failure message
-                        text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                        reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                        message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                        
-                        if text_outputs:
-                            final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                            self.logger.info(f"CUA completed with text output: {final_text}")
-                            if SUCCESS_STRING_LITERAL in final_text:
-                                return final_text
-                            elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
-                                return final_text
-                            elif FAILED_STRING_LITERAL in final_text:
-                                return final_text
-                        
-                        if message_outputs:
-                            # Handle both direct text and ResponseOutputText objects
-                            final_message = ""
-                            for msg in message_outputs:
-                                if hasattr(msg, 'text'):
-                                    final_message = msg.text
-                                    break
-                                elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                    final_message = msg.content.text
-                                    break
-                                elif str(msg):
-                                    msg_str = str(msg)
-                                    # Extract text from ResponseOutputText representation
-                                    if "text='" in msg_str:
-                                        start = msg_str.find("text='") + 6
-                                        end = msg_str.find("'", start)
-                                        if end > start:
-                                            final_message = msg_str[start:end]
-                                            break
-                            
-                            self.logger.info(f"CUA completed with message text: {final_message}")
-                            # Check if message contains our response patterns
-                            if SUCCESS_STRING_LITERAL in final_message:
-                                return final_message  # Return the actual success message
-                            elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                return SESSION_INVALIDATED
-                            elif FAILED_STRING_LITERAL in final_message:
-                                return f"{FAILED_PREFIX}: {final_message}"
-                        
-                        if reasoning_outputs:
-                            final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                            self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                            # Check if reasoning contains our response patterns
-                            if SUCCESS_STRING_LITERAL in final_reasoning:
-                                return SUCCESS_TWEET_LIKED_FROM_REASONING
-                            elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                return SESSION_INVALIDATED
-                            elif FAILED_STRING_LITERAL in final_reasoning:
-                                return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                        
-                        self.logger.info("No computer call found, CUA workflow completed")
-                        return COMPLETED_CUA_TWEET_LIKING_WORKFLOW_TEXT
-                    
-                    computer_call = computer_calls[0]
-                    action = computer_call.action
-                    call_id = computer_call.call_id
-                    
-                    # Handle safety checks - automatically acknowledge routine social media interaction checks
-                    acknowledged_checks = []
-                    if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                        self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                        # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                        for check in computer_call.pending_safety_checks:
-                            self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                            acknowledged_checks.append({
-                                "id": check.id,
-                                "code": check.code,
-                                "message": check.message
-                            })
-                    
-                    # Execute the computer action
-                    try:
-                        await self._execute_computer_action(computer, action)
-                    except Exception as e:
-                        self.logger.error(f"Error executing computer action {action.type}: {e}")
-                        return f"FAILED: Computer action execution error: {e}"
-                    
-                    # Take screenshot
-                    try:
-                        screenshot_b64 = await computer.screenshot()
-                    except Exception as e:
-                        self.logger.error(f"Error taking screenshot: {e}")
-                        return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                    
-                    # Prepare next request input
-                    input_content = [{
-                        "call_id": call_id,
-                        "type": "computer_call_output",
-                        "output": {
-                            "type": "input_image",
-                            "image_url": f"data:image/png;base64,{screenshot_b64}"
-                        }
-                    }]
-                    
-                    # Add acknowledged safety checks if any
-                    if acknowledged_checks:
-                        input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                        self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                    
-                    # Send next request
-                    try:
-                        response = client.responses.create(
-                            model=COMPUTER_USE_MODEL,
-                            previous_response_id=response.id,
-                            tools=[CUA_TOOL_CONFIG],
-                            input=input_content,
-                            truncation="auto"
-                        )
-                    except Exception as e:
-                        self.logger.error(f"Error in CUA API call: {e}")
-                        return f"{FAILED_PREFIX}: API call error: {e}"
-                
-                self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                return COMPLETED_CUA_ITERATIONS
-                
-        except Exception as e:
-            error_msg = f"CUA tweet liking failed: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def repost_tweet_via_cua(self, tweet_url: str) -> str:
-        """
-        Repost a specific tweet via the ComputerUseAgent using browser automation.
-
-        Args:
-            tweet_url: The URL of the tweet to repost.
-
-        Returns:
-            String describing the outcome of the CUA operation.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting CUA tweet reposting workflow for URL: %s", tweet_url)
-        
-        async def _internal_repost_via_cua() -> str:
-            """Internal async function to handle CUA tweet reposting workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # Navigate directly to the tweet URL using Playwright before starting CUA
-                    self.logger.info(f"🧭 Direct navigation to tweet URL: {tweet_url}")
-                    try:
-                        await computer.page.goto(tweet_url, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
-                        await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)  # Additional wait for page stabilization
-                        self.logger.info(f"✅ Successfully navigated to {tweet_url}")
-                    except Exception as nav_error:
-                        self.logger.error(f"❌ Failed to navigate to {tweet_url}: {nav_error}")
-                        return f"{FAILED_PREFIX}: Could not navigate to tweet URL - {nav_error}"
-                    
-                    # Define task-specific prompt (tweet reposting)
-                    task_specific_prompt = get_tweet_repost_prompt(tweet_url)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for tweet reposting")
-                    initial_input_messages = [
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation="auto"
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_LIKE  # Reuse the like iterations limit since reposting is similar complexity
-                    iteration = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == "text" and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:200]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif FAILED_STRING_LITERAL in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_reasoning:
-                                    return f"{SUCCESS_PREFIX}: Tweet reposted successfully (from reasoning)"
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                            
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return f"{COMPLETED_PREFIX}: CUA repost workflow finished"
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media interaction checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"FAILED: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": "computer_call_output",
-                            "output": {
-                                "type": "input_image",
-                                "image_url": f"data:image/png;base64,{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation="auto"
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA tweet reposting failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_repost_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute CUA tweet reposting workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def follow_user_via_cua(self, profile_url: str) -> str:
-        """
-        Follow a specific user via the ComputerUseAgent using browser automation.
-
-        Args:
-            profile_url: The URL of the user's profile to follow.
-
-        Returns:
-            String describing the outcome of the CUA operation.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting CUA user following workflow for URL: %s", profile_url)
-        
-        async def _internal_follow_via_cua() -> str:
-            """Internal async function to handle CUA user following workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # Navigate directly to the profile URL using Playwright before starting CUA
-                    self.logger.info(f"🧭 Direct navigation to profile URL: {profile_url}")
-                    try:
-                        await computer.page.goto(profile_url, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
-                        await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)  # Additional wait for page stabilization
-                        self.logger.info(f"✅ Successfully navigated to {profile_url}")
-                    except Exception as nav_error:
-                        self.logger.error(f"❌ Failed to navigate to {profile_url}: {nav_error}")
-                        return f"{FAILED_PREFIX}: Could not navigate to profile URL - {nav_error}"
-                    
-                    # Define task-specific prompt (user following)
-                    task_specific_prompt = get_user_follow_prompt(profile_url)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for user following")
-                    initial_input_messages = [
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation="auto"
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_LIKE  # Reuse the like iterations limit since following is similar complexity
-                    iteration = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == "text" and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:200]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif FAILED_STRING_LITERAL in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_reasoning:
-                                    return f"{SUCCESS_PREFIX}: User followed successfully (from reasoning)"
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                            
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return f"{COMPLETED_PREFIX}: CUA follow workflow finished"
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media interaction checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"FAILED: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": "computer_call_output",
-                            "output": {
-                                "type": "input_image",
-                                "image_url": f"data:image/png;base64,{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation="auto"
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA user following failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_follow_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute CUA user following workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def search_x_for_topic_via_cua(self, query: str, num_results: int = 3) -> str:
-        """
-        Search X.com for a topic and extract text from the top results via CUA.
-
-        Args:
-            query: The search query to execute on X.com.
-            num_results: Number of search results to extract (default: 3).
-
-        Returns:
-            String containing JSON array of tweet texts or error message.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting CUA search workflow for query: %s", query)
-        self.logger.info("Requesting %d search results", num_results)
-        
-        async def _internal_search_via_cua() -> str:
-            """Internal async function to handle CUA search workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # NOTE: This workflow does NOT start with page.goto as per instructions
-                    # It starts from the current page (assumed to be home timeline or another X.com page)
-                    self.logger.info("Starting search from current page (no navigation)")
-                    
-                    # Define task-specific prompt (X.com search)
-                    task_specific_prompt = get_search_x_prompt(query, num_results)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for X.com search")
-                    initial_input_messages = [
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation="auto"
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_DEFAULT  # Search may need more iterations than simple actions
-                    iteration = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == "text" and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:200]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif FAILED_STRING_LITERAL in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_reasoning:
-                                    return f"{SUCCESS_PREFIX}: Search completed successfully (from reasoning)"
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                            
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return f"{COMPLETED_PREFIX}: CUA search workflow finished"
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media interaction checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"FAILED: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": "computer_call_output",
-                            "output": {
-                                "type": "input_image",
-                                "image_url": f"data:image/png;base64,{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation="auto"
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA search failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_search_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute CUA search workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def _contains_unicode_characters(self, text: str) -> bool:
-        """
-        Check if text contains Unicode characters (like emojis) that CUA cannot handle.
-
-        Args:
-            text: Text to analyze for Unicode content.
-
-        Returns:
-            True if text contains Unicode characters, False if ASCII-only.
-        """
-        return any(ord(char) > UNICODE_THRESHOLD for char in text)
-
-    def post_tweet_hybrid(self, tweet_text: str) -> str:
-        """
-        Post a tweet using the optimal method based on content analysis.
-        
-        Uses CUA for ASCII-only content and X API for content with Unicode/emojis.
-
-        Args:
-            tweet_text: The exact text content to post as a tweet.
-
-        Returns:
-            String describing the outcome of the posting operation.
-        """
-        self.logger.info("Starting hybrid tweet posting workflow")
-        self.logger.info(f"Tweet text: {tweet_text}")
-        
-        # Analyze content to determine optimal posting method
-        has_unicode = self._contains_unicode_characters(tweet_text)
-        
-        if has_unicode:
-            self.logger.info("🔄 Unicode characters detected - using X API for reliable posting")
-            try:
-                result = _post_text_tweet(text=tweet_text)
-                self.logger.info("✅ API posting completed successfully: %s", result)
-                return f"SUCCESS: Tweet posted via X API - {result}"
-            except Exception as e:
-                self.logger.error("❌ API posting failed: %s", e)
-                return f"FAILED: X API posting error - {e}"
-        else:
-            self.logger.info("🤖 ASCII-only content detected - using CUA for browser automation")
-            result = self.post_tweet_via_cua(tweet_text)
-            if SUCCESS_STRING_LITERAL in result:
-                self.logger.info("✅ CUA posting completed successfully")
-                return f"SUCCESS: Tweet posted via CUA - {result}"
-            else:
-                self.logger.warning("⚠️ CUA posting failed, falling back to X API")
-                try:
-                    fallback_result = _post_text_tweet(text=tweet_text)
-                    self.logger.info("✅ API fallback posting completed: %s", fallback_result)
-                    return f"SUCCESS: Tweet posted via X API (fallback) - {fallback_result}"
-                except Exception as e:
-                    self.logger.error("❌ Both CUA and API posting failed: %s", e)
-                    return f"FAILED: Both CUA and API methods failed - CUA: {result}, API: {e}"
-
-    def reply_to_tweet_hybrid(self, tweet_url: str, reply_text: str) -> str:
-        """
-        Reply to a tweet using the optimal method based on content analysis.
-        
-        Uses CUA for ASCII-only content and X API for content with Unicode/emojis.
-
-        Args:
-            tweet_url: The URL of the tweet to reply to.
-            reply_text: The exact text content to post as a reply.
-
-        Returns:
-            String describing the outcome of the reply operation.
-        """
-        self.logger.info("Starting hybrid tweet reply workflow")
-        self.logger.info(f"Tweet URL: {tweet_url}")
-        self.logger.info(f"Reply text: {reply_text}")
-        
-        # Analyze content to determine optimal reply method
-        has_unicode = self._contains_unicode_characters(reply_text)
-        
-        if has_unicode:
-            self.logger.info("🔄 Unicode characters detected - using X API for reliable reply posting")
-            # Extract tweet ID from URL for API reply
-            try:
-                import re
-                tweet_id_match = re.search(r'/status/(\d+)', tweet_url)
-                if not tweet_id_match:
-                    return f"FAILED: Could not extract tweet ID from URL: {tweet_url}"
-                
-                tweet_id = tweet_id_match.group(1)
-                self.logger.info(f"Extracted tweet ID: {tweet_id}")
-                
-                result = _post_text_tweet(text=reply_text, in_reply_to_tweet_id=tweet_id)
-                self.logger.info("✅ API reply posting completed successfully: %s", result)
-                return f"SUCCESS: Reply posted via X API - {result}"
-            except Exception as e:
-                self.logger.error("❌ API reply posting failed: %s", e)
-                return f"FAILED: X API reply posting error - {e}"
-        else:
-            self.logger.info("🤖 ASCII-only content detected - using CUA for browser automation")
-            result = self.reply_to_tweet_via_cua(tweet_url, reply_text)
-            if SUCCESS_STRING_LITERAL in result:
-                self.logger.info("✅ CUA reply posting completed successfully")
-                return f"SUCCESS: Reply posted via CUA - {result}"
-            else:
-                self.logger.warning("⚠️ CUA reply posting failed, falling back to X API")
-                try:
-                    # Extract tweet ID for API fallback
-                    import re
-                    tweet_id_match = re.search(r'/status/(\d+)', tweet_url)
-                    if not tweet_id_match:
-                        return f"FAILED: Could not extract tweet ID for API fallback: {tweet_url}"
-                    
-                    tweet_id = tweet_id_match.group(1)
-                    fallback_result = _post_text_tweet(text=reply_text, in_reply_to_tweet_id=tweet_id)
-                    self.logger.info("✅ API fallback reply posting completed: %s", fallback_result)
-                    return f"SUCCESS: Reply posted via X API (fallback) - {fallback_result}"
-                except Exception as e:
-                    self.logger.error("❌ Both CUA and API reply posting failed: %s", e)
-                    return f"FAILED: Both CUA and API methods failed - CUA: {result}, API: {e}"
+            return f"FAILED: Research query '{query}' failed."
 
     async def test_supabase_mcp_connection(self) -> list:
         """
@@ -2428,105 +310,6 @@ class OrchestratorAgent(Agent):
             self.logger.error(f"❌ Failed to connect to Supabase MCP server: {e}", exc_info=True)
             self.logger.error("Since the .env file is blocked by gitignore, I confirm that Node.js is installed and the SUPABASE_ACCESS_TOKEN is already set up in our .env file.")
             return []
-
-    async def _execute_computer_action(self, computer, action):
-        """Execute a computer action using the AsyncComputer interface."""
-        action_type = action.type
-        
-        if action_type == "screenshot":
-            # Screenshot will be taken after this method returns
-            pass
-        elif action_type == "click":
-            self.logger.info(f"Executing click at ({action.x}, {action.y}) with button {action.button}")
-            await computer.click(action.x, action.y, action.button)
-            # Add extra wait for X.com UI to respond to clicks
-            await asyncio.sleep(CLICK_RESPONSE_DELAY / 1000)
-        elif action_type == "double_click":
-            self.logger.info(f"Executing double-click at ({action.x}, {action.y})")
-            await computer.double_click(action.x, action.y)
-            await asyncio.sleep(CLICK_RESPONSE_DELAY / 1000)
-        elif action_type == "type":
-            self.logger.info(f"Typing text: '{action.text}'")
-            await computer.type(action.text)
-            await asyncio.sleep(KEYPRESS_RESPONSE_DELAY / 1000)
-        elif action_type == "keypress":
-            self.logger.info(f"Pressing keys: {action.keys}")
-            
-            # CRITICAL FIX: Special handling for 'j' navigation to detect viewport displacement
-            if action.keys == ['j'] or action.keys == 'j':
-                self.logger.info("🔧 Executing 'j' navigation with viewport displacement detection")
-                
-                # Take a screenshot before the 'j' keypress to establish baseline
-                try:
-                    before_screenshot = await computer.screenshot()
-                    before_size = len(before_screenshot)
-                    self.logger.info(f"Pre-navigation screenshot size: {before_size}")
-                except Exception as e:
-                    self.logger.warning(f"Could not capture pre-navigation screenshot: {e}")
-                    before_size = 0
-                
-                # Execute the 'j' keypress
-                await computer.keypress(action.keys)
-                await asyncio.sleep(UI_RESPONSE_DELAY / 1000)  # Longer wait for navigation to complete
-                
-                # Take a screenshot after the 'j' keypress to check for displacement
-                try:
-                    after_screenshot = await computer.screenshot()
-                    after_size = len(after_screenshot)
-                    self.logger.info(f"Post-navigation screenshot size: {after_size}")
-                    
-                    # Detect potential viewport displacement
-                    size_change_ratio = abs(after_size - before_size) / max(before_size, 1)
-                    
-                    if after_size < SCREENSHOT_MIN_SIZE_THRESHOLD or size_change_ratio > VIEWPORT_DISPLACEMENT_RATIO_THRESHOLD:
-                        self.logger.warning(f"⚠️ Potential viewport displacement detected!")
-                        self.logger.warning(f"Size change: {before_size} -> {after_size} (ratio: {size_change_ratio:.2f})")
-                        
-                        # Attempt automatic viewport recovery
-                        self.logger.info("🔧 Attempting automatic viewport recovery...")
-                        try:
-                            # Method 1: Reset scroll position via JavaScript
-                            await computer.page.evaluate("window.scrollTo(0, 0);")
-                            await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                            
-                            # Method 2: Press Home key to return to top
-                            await computer.keypress(['Home'])
-                            await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                            
-                            # Method 3: Re-navigate to home timeline if needed
-                            recovery_screenshot = await computer.screenshot()
-                            recovery_size = len(recovery_screenshot)
-                            
-                            if recovery_size > SCREENSHOT_MIN_SIZE_THRESHOLD:
-                                self.logger.info("✅ Viewport recovery successful")
-                            else:
-                                self.logger.warning("⚠️ Viewport recovery may have failed")
-                                
-                        except Exception as recovery_error:
-                            self.logger.error(f"❌ Viewport recovery failed: {recovery_error}")
-                    else:
-                        self.logger.info("✅ Navigation completed without viewport displacement")
-                        
-                except Exception as e:
-                    self.logger.warning(f"Could not capture post-navigation screenshot: {e}")
-            else:
-                # Normal keypress execution for non-'j' keys
-                await computer.keypress(action.keys)
-                await asyncio.sleep(KEYPRESS_RESPONSE_DELAY / 1000)
-        elif action_type == "scroll":
-            self.logger.info(f"Scrolling at ({action.x}, {action.y}) by ({action.scroll_x}, {action.scroll_y})")
-            await computer.scroll(action.x, action.y, action.scroll_x, action.scroll_y)
-            await asyncio.sleep(SCROLL_RESPONSE_DELAY / 1000)
-        elif action_type == "move":
-            await computer.move(action.x, action.y)
-        elif action_type == "wait":
-            self.logger.info("Executing wait action")
-            await computer.wait()
-        elif action_type == "drag":
-            await computer.drag([(p.x, p.y) for p in action.path])
-            await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-        else:
-            self.logger.warning(f"Unknown computer action type: {action_type}")
 
     async def process_new_mentions_workflow(self) -> None:
         """Process new mentions workflow: fetch mentions, draft replies, and request human review."""
@@ -2608,536 +391,6 @@ class OrchestratorAgent(Agent):
                         "Failed to update review status for review_id %s: %s", review_id, e2
                     )
         self.logger.info("Completed process approved replies workflow.")
-
-    def get_home_timeline_tweets_via_cua_robust(self, num_tweets: int = 3) -> str:
-        """
-        Read the text content of multiple tweets from the home timeline via CUA using robust individual page navigation.
-        
-        This method uses a more robust approach that navigates to each tweet's individual page to capture content,
-        eliminating viewport displacement issues and providing more reliable content extraction.
-
-        Args:
-            num_tweets: Number of tweets to read from the top of the timeline (default: 3).
-
-        Returns:
-            JSON string containing the list of tweet texts, or error message.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting robust CUA home timeline reading workflow for %d tweets", num_tweets)
-        
-        async def _internal_robust_timeline_via_cua() -> str:
-            """Internal async function to handle robust CUA timeline reading workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # Navigate directly to home timeline using Playwright before starting CUA
-                    self.logger.info(f"🧭 Pre-navigating to home timeline for robust reading: {X_HOME_URL}")
-                    try:
-                        await computer.page.goto(X_HOME_URL, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
-                        await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)  # Additional wait for page stabilization
-                        self.logger.info(f"✅ Successfully pre-navigated to home timeline")
-                    except Exception as nav_error:
-                        self.logger.error(f"❌ Failed to pre-navigate to home timeline: {nav_error}")
-                        return f"{FAILED_PREFIX}: Could not navigate to home timeline - {nav_error}"
-                    
-                    # Define task-specific prompt for robust timeline reading with individual page navigation
-                    task_specific_prompt = get_robust_timeline_reading_prompt(num_tweets)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for robust timeline reading")
-                    initial_input_messages = [
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation="auto"
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_REPLY
-                    iteration = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == "text" and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:200]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA completed with text output: {final_text}")
-                                if SUCCESS_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif FAILED_STRING_LITERAL in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_reasoning:
-                                    return SUCCESS_REPLY_POSTED_FROM_REASONING
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                            
-                            self.logger.info("No computer call found, CUA workflow completed")
-                            return COMPLETED_CUA_WORKFLOW_TEXT
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media interaction checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"FAILED: Computer action execution error: {e}"
-                        
-                        # Take screenshot
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": "computer_call_output",
-                            "output": {
-                                "type": "input_image",
-                                "image_url": f"data:image/png;base64,{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation="auto"
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA tweet reply failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_robust_timeline_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute robust CUA timeline reading workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
-
-    def get_home_timeline_tweets_via_cua_consolidated(self, num_tweets: int = DEFAULT_TIMELINE_TWEET_COUNT) -> str:
-        """
-        Read the text content of multiple tweets from the home timeline via CUA using consolidated approach.
-        
-        This method combines the successful viewport displacement fixes with robust individual page navigation
-        to provide the most reliable tweet content extraction method.
-
-        Args:
-            num_tweets: Number of tweets to read from the top of the timeline (default: 3).
-
-        Returns:
-            JSON string containing the list of tweet texts, or error message.
-
-        Raises:
-            Exception: If the CUA workflow encounters an unrecoverable error.
-        """
-        self.logger.info("Starting consolidated CUA home timeline reading workflow for %d tweets", num_tweets)
-        
-        async def _internal_consolidated_timeline_via_cua() -> str:
-            """Internal async function to handle consolidated CUA timeline reading workflow."""
-            try:
-                # Use LocalPlaywrightComputer with proper configuration
-                async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
-                    
-                    # =================================================================
-                    # 🔧 LAYER 1: PRE-VIEWPORT STABILIZATION (PROVEN SUCCESSFUL)
-                    # =================================================================
-                    self.logger.info("🔧 Starting Layer 1: Pre-viewport stabilization for consolidated navigation")
-                    
-                    try:
-                        # Step 1: Reset scroll position to top
-                        self.logger.info("📐 Resetting scroll position to top")
-                        await computer.page.evaluate("window.scrollTo(0, 0);")
-                        await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                        
-                        # Step 2: Ensure consistent zoom level (100%)
-                        self.logger.info("🔍 Setting zoom level to 100%")
-                        await computer.page.evaluate("document.body.style.zoom = '1.0';")
-                        await asyncio.sleep(KEYPRESS_RESPONSE_DELAY / 1000)
-                        
-                        # Step 3: Add viewport stabilization CSS to prevent displacement
-                        self.logger.info("🎯 Adding viewport stabilization CSS")
-                        stabilization_css = """
-                        body { 
-                            overflow-x: hidden !important;
-                            position: relative !important;
-                        }
-                        html {
-                            scroll-behavior: auto !important;
-                        }
-                        [data-testid="primaryColumn"] {
-                            position: relative !important;
-                            transform: none !important;
-                        }
-                        """
-                        await computer.page.add_style_tag(content=stabilization_css)
-                        await asyncio.sleep(KEYPRESS_RESPONSE_DELAY / 1000)
-                        
-                        # Step 4: Force layout recalculation
-                        self.logger.info("⚡ Forcing layout recalculation")
-                        await computer.page.evaluate("""
-                            // Force layout recalculation
-                            document.body.offsetHeight;
-                            window.getComputedStyle(document.body).getPropertyValue('height');
-                            // Ensure we're at the top of the page
-                            window.scrollTo({top: 0, left: 0, behavior: 'auto'});
-                        """)
-                        await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                        
-                        # Step 5: Navigate to home timeline if not already there
-                        current_url = computer.page.url
-                        if not current_url.endswith('/home'):
-                            self.logger.info("🧭 Navigating to home timeline for stable starting point")
-                            await computer.page.goto(X_HOME_URL, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
-                            await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)
-                            
-                            # Re-apply stabilization after navigation
-                            await computer.page.evaluate("window.scrollTo(0, 0);")
-                            await computer.page.add_style_tag(content=stabilization_css)
-                            await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                        
-                        self.logger.info("✅ Layer 1: Viewport stabilization completed successfully")
-                        
-                    except Exception as stabilization_error:
-                        self.logger.warning(f"⚠️ Viewport stabilization failed (proceeding anyway): {stabilization_error}")
-                    
-                    # =================================================================
-                    # End of Layer 1 Viewport Stabilization
-                    # =================================================================
-                    
-                    # Initialize the OpenAI client for direct responses API calls
-                    from openai import OpenAI
-                    import base64
-                    client = OpenAI(api_key=settings.openai_api_key)
-                    
-                    # Define system instructions (general CUA behavior)
-                    system_instructions = CUA_SYSTEM_INSTRUCTIONS
-                    
-                    # Define task-specific prompt for consolidated timeline reading with both viewport fixes and individual page navigation
-                    task_specific_prompt = get_consolidated_timeline_reading_prompt(num_tweets)
-                    
-                    # Initial request to get first screenshot
-                    self.logger.info("Sending initial CUA request for consolidated timeline reading")
-                    initial_input_messages = [
-                        {"role": "system", "content": system_instructions},
-                        {"role": "user", "content": task_specific_prompt}
-                    ]
-                    response = client.responses.create(
-                        model=COMPUTER_USE_MODEL,
-                        tools=[CUA_TOOL_CONFIG],
-                        input=initial_input_messages,
-                        truncation="auto"
-                    )
-                    
-                    max_iterations = CUA_MAX_ITERATIONS_ROBUST_TIMELINE
-                    iteration = 0
-                    last_screenshot_size = 0
-                    consecutive_empty_screenshots = 0
-                    
-                    while iteration < max_iterations:
-                        iteration += 1
-                        self.logger.info(f"CUA consolidated iteration {iteration}")
-                        
-                        # Check for computer calls in the response
-                        computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
-                        
-                        # Debug: Log all response output items
-                        self.logger.info(f"Response output items: {len(response.output)}")
-                        for i, item in enumerate(response.output):
-                            if hasattr(item, 'type'):
-                                self.logger.info(f"  Item {i}: type={item.type}")
-                                if item.type == "text" and hasattr(item, 'text'):
-                                    self.logger.info(f"    Text content: {item.text[:200]}...")
-                            else:
-                                self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
-                        
-                        if not computer_calls:
-                            # Check for text output that might contain our success/failure message
-                            text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
-                            reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
-                            message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
-                            
-                            if text_outputs:
-                                final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
-                                self.logger.info(f"CUA consolidated completed with text output: {final_text}")
-                                if SUCCESS_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
-                                    return final_text
-                                elif FAILED_STRING_LITERAL in final_text:
-                                    return final_text
-                            
-                            if message_outputs:
-                                # Handle both direct text and ResponseOutputText objects
-                                final_message = ""
-                                for msg in message_outputs:
-                                    if hasattr(msg, 'text'):
-                                        final_message = msg.text
-                                        break
-                                    elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
-                                        final_message = msg.content.text
-                                        break
-                                    elif str(msg):
-                                        msg_str = str(msg)
-                                        # Extract text from ResponseOutputText representation
-                                        if "text='" in msg_str:
-                                            start = msg_str.find("text='") + 6
-                                            end = msg_str.find("'", start)
-                                            if end > start:
-                                                final_message = msg_str[start:end]
-                                                break
-                                
-                                self.logger.info(f"CUA consolidated completed with message text: {final_message}")
-                                # Check if message contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_message:
-                                    return final_message  # Return the actual success message
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_message:
-                                    return f"{FAILED_PREFIX}: {final_message}"
-                            
-                            if reasoning_outputs:
-                                final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
-                                self.logger.info(f"CUA consolidated completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
-                                # Check if reasoning contains our response patterns
-                                if SUCCESS_STRING_LITERAL in final_reasoning:
-                                    return SUCCESS_MESSAGE_TWEETS_EXTRACTED
-                                elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
-                                    return SESSION_INVALIDATED
-                                elif FAILED_STRING_LITERAL in final_reasoning:
-                                    return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
-                            
-                            self.logger.info("No computer call found, CUA consolidated workflow completed")
-                            return COMPLETED_CUA_WORKFLOW_TEXT
-                        
-                        computer_call = computer_calls[0]
-                        action = computer_call.action
-                        call_id = computer_call.call_id
-                        
-                        # Handle safety checks - automatically acknowledge routine social media interaction checks
-                        acknowledged_checks = []
-                        if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
-                            self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
-                            # Automatically acknowledge routine social media interaction safety checks for autonomous operation
-                            for check in computer_call.pending_safety_checks:
-                                self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
-                                acknowledged_checks.append({
-                                    "id": check.id,
-                                    "code": check.code,
-                                    "message": check.message
-                                })
-                        
-                        # Execute the computer action with enhanced viewport displacement detection
-                        try:
-                            await self._execute_computer_action(computer, action)
-                        except Exception as e:
-                            self.logger.error(f"Error executing computer action {action.type}: {e}")
-                            return f"FAILED: Computer action execution error: {e}"
-                        
-                        # Take screenshot with enhanced monitoring
-                        try:
-                            screenshot_b64 = await computer.screenshot()
-                            screenshot_size = len(screenshot_b64)
-                            
-                            # Enhanced screenshot monitoring for consolidated method
-                            self.logger.info(f"Consolidated screenshot size: {screenshot_size} characters")
-                            
-                            # Check for consistently small screenshots (blank page indicator)
-                            if screenshot_size < SCREENSHOT_MIN_SIZE_THRESHOLD:
-                                consecutive_empty_screenshots += 1
-                                self.logger.warning(f"Small screenshot detected in consolidated method ({screenshot_size} chars). Count: {consecutive_empty_screenshots}")
-                                
-                                # If we get multiple small screenshots, the page is likely in a bad state
-                                if consecutive_empty_screenshots >= CONSECUTIVE_EMPTY_SCREENSHOT_LIMIT:
-                                    self.logger.error("Multiple consecutive small screenshots in consolidated method - page appears blank")
-                                    
-                                    # Enhanced recovery for consolidated method
-                                    try:
-                                        self.logger.info("Attempting enhanced consolidated recovery")
-                                        
-                                        # Step 1: Reset viewport using JavaScript
-                                        await computer.page.evaluate("window.scrollTo(0, 0);")
-                                        await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                                        
-                                        # Step 2: Try Home key navigation
-                                        await computer.keypress(['Home'])
-                                        await asyncio.sleep(UI_RESPONSE_DELAY / 1000)
-                                        
-                                        # Step 3: Re-navigate to home timeline
-                                        await computer.keypress(['g', 'h'])
-                                        await asyncio.sleep(PAGE_STABILIZATION_DELAY / 1000)
-                                        
-                                        # Take a new screenshot to check if recovery worked
-                                        recovery_screenshot = await computer.screenshot()
-                                        recovery_size = len(recovery_screenshot)
-                                        self.logger.info(f"Consolidated recovery screenshot size: {recovery_size} characters")
-                                        
-                                        if recovery_size > SCREENSHOT_MIN_SIZE_THRESHOLD:
-                                            self.logger.info("Consolidated enhanced recovery successful")
-                                            screenshot_b64 = recovery_screenshot
-                                            consecutive_empty_screenshots = 0
-                                        else:
-                                            self.logger.error("Consolidated enhanced recovery failed - still getting small screenshots")
-                                            return "FAILED: Page appears blank and enhanced recovery attempts failed"
-                                    except Exception as recovery_error:
-                                        self.logger.error(f"Consolidated recovery attempt failed: {recovery_error}")
-                                        return "FAILED: Enhanced recovery failed in consolidated method"
-                            else:
-                                consecutive_empty_screenshots = 0  # Reset counter on good screenshot
-                            
-                            last_screenshot_size = screenshot_size
-                            
-                        except Exception as e:
-                            self.logger.error(f"Error taking screenshot in consolidated method: {e}")
-                            return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
-                        
-                        # Prepare next request input
-                        input_content = [{
-                            "call_id": call_id,
-                            "type": CONTENT_TYPE_COMPUTER_CALL_OUTPUT,
-                            "output": {
-                                "type": CONTENT_TYPE_INPUT_IMAGE,
-                                "image_url": f"{IMAGE_DATA_URL_PREFIX},{screenshot_b64}"
-                            }
-                        }]
-                        
-                        # Add acknowledged safety checks if any
-                        if acknowledged_checks:
-                            input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
-                            self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in consolidated request")
-                        
-                        # Send next request
-                        try:
-                            response = client.responses.create(
-                                model=COMPUTER_USE_MODEL,
-                                previous_response_id=response.id,
-                                tools=[CUA_TOOL_CONFIG],
-                                input=input_content,
-                                truncation=API_TRUNCATION_AUTO
-                            )
-                        except Exception as e:
-                            self.logger.error(f"Error in consolidated CUA API call: {e}")
-                            return f"{FAILED_PREFIX}: API call error: {e}"
-                    
-                    self.logger.warning(f"CUA consolidated method reached maximum iterations ({max_iterations})")
-                    return COMPLETED_CUA_ITERATIONS
-                    
-            except Exception as e:
-                error_msg = f"CUA consolidated timeline reading failed: {e}"
-                self.logger.error(error_msg, exc_info=True)
-                return f"{FAILED_PREFIX}: {error_msg}"
-        
-        try:
-            return asyncio.run(_internal_consolidated_timeline_via_cua())
-        except Exception as e:
-            error_msg = f"Failed to execute consolidated CUA timeline reading workflow: {e}"
-            self.logger.error(error_msg, exc_info=True)
-            return f"{FAILED_PREFIX}: {error_msg}"
 
     # ==================== MEMORY-DRIVEN DECISION TOOLS ====================
 
@@ -3316,52 +569,110 @@ class OrchestratorAgent(Agent):
                 "error": str(e)
             }
 
-    # ==================== ENHANCED CUA METHODS WITH MEMORY ====================
+    # ==================== ENHANCED METHODS WITH MEMORY ====================
 
-    async def _enhanced_like_tweet_with_memory(self, tweet_url: str) -> str:
+    async def _enhanced_like_tweet_with_memory(self, tweet_url: str):
         """Enhanced tweet liking with memory-driven spam prevention.
         
         Args:
-            tweet_url: URL of the tweet to like
+            tweet_url: URL of the tweet to like OR a search query (e.g., '#AI')
             
         Returns:
-            Result string indicating success/failure with memory context
+            CuaTask object if proceeding with like, or string message if skipping
         """
-        # Check if we've recently interacted with this tweet
-        memory_check = await self._check_recent_target_interactions(
-            target=tweet_url,
-            action_types=['like_tweet', 'reply_to_tweet'],
-            hours_back=24
-        )
+        # Determine if this is a specific URL or a search query
+        is_search_query = not tweet_url.startswith('http')
         
-        if memory_check.get('should_skip', False):
-            result_msg = f"⏭️ Skipping tweet like - {memory_check.get('reason', 'Recent interaction detected')}"
-            self.logger.info(result_msg)
+        if is_search_query:
+            # This is a search query, not a specific tweet URL
+            search_query = tweet_url
+            target_for_memory = f"search_and_like:{search_query}"
             
-            # Log the skipped action to memory
-            await self._log_action_to_memory(
-                action_type='like_tweet_skipped',
-                result='SKIPPED',
-                target=tweet_url,
-                details={'reason': memory_check.get('reason'), 'interaction_count': memory_check.get('interaction_count')}
+            # Check if we've recently done a search-and-like for this query
+            memory_check = await self._check_recent_target_interactions(
+                target=target_for_memory,
+                action_types=['search_and_like', 'like_tweet'],
+                hours_back=2  # Shorter window for search queries
             )
             
-            return result_msg
-        
-        # Proceed with the like action - call internal async method directly
-        self.logger.info(f"✅ Memory check passed - proceeding with tweet like: {tweet_url}")
-        result = await self._internal_like_via_cua_with_params(tweet_url)
-        
-        # Log the action result to memory
-        action_result = 'SUCCESS' if 'SUCCESS' in result else 'FAILED'
-        await self._log_action_to_memory(
-            action_type='like_tweet',
-            result=action_result,
-            target=tweet_url,
-            details={'cua_result': result}
-        )
-        
-        return result
+            if memory_check.get('should_skip', False):
+                result_msg = f"⏭️ Skipping search-and-like for '{search_query}' - {memory_check.get('reason', 'Recent similar action detected')}"
+                self.logger.info(result_msg)
+                
+                # Log the skipped action to memory
+                await self._log_action_to_memory(
+                    action_type='search_and_like_skipped',
+                    result='SKIPPED',
+                    target=target_for_memory,
+                    details={'reason': memory_check.get('reason'), 'search_query': search_query}
+                )
+                
+                return result_msg
+            
+            # Generate comprehensive search-and-like prompt
+            from core.cua_instructions import get_search_and_like_tweet_prompt
+            prompt = get_search_and_like_tweet_prompt(search_query, max_iterations=25)
+            
+            # Create the CuaTask object for search-and-like
+            task = CuaTask(
+                prompt=prompt,
+                start_url="https://x.com",  # Start from X.com home page
+                max_iterations=25  # More iterations needed for search-and-like
+            )
+            
+            # Log the task creation to memory
+            await self._log_action_to_memory(
+                action_type='search_and_like_task_created',
+                result='TASK_CREATED',
+                target=target_for_memory,
+                details={'search_query': search_query, 'max_iterations': task.max_iterations}
+            )
+            
+            self.logger.info(f"✅ Memory check passed - created search-and-like CUA task for: {search_query}")
+            return task
+            
+        else:
+            # This is a specific tweet URL - use the original logic
+            memory_check = await self._check_recent_target_interactions(
+                target=tweet_url,
+                action_types=['like_tweet', 'reply_to_tweet'],
+                hours_back=24
+            )
+            
+            if memory_check.get('should_skip', False):
+                result_msg = f"⏭️ Skipping tweet like - {memory_check.get('reason', 'Recent interaction detected')}"
+                self.logger.info(result_msg)
+                
+                # Log the skipped action to memory
+                await self._log_action_to_memory(
+                    action_type='like_tweet_skipped',
+                    result='SKIPPED',
+                    target=tweet_url,
+                    details={'reason': memory_check.get('reason'), 'interaction_count': memory_check.get('interaction_count')}
+                )
+                
+                return result_msg
+            
+            # Generate the prompt for liking using the CUA instructions
+            prompt = get_tweet_like_prompt(tweet_url)
+            
+            # Create the CuaTask object
+            task = CuaTask(
+                prompt=prompt,
+                start_url=tweet_url,
+                max_iterations=20  # Reasonable default for like operations
+            )
+            
+            # Log the task creation to memory
+            await self._log_action_to_memory(
+                action_type='like_tweet_task_created',
+                result='TASK_CREATED',
+                target=tweet_url,
+                details={'task_prompt': prompt[:100], 'max_iterations': task.max_iterations}
+            )
+            
+            self.logger.info(f"✅ Memory check passed - creating CUA task for tweet like: {tweet_url}")
+            return task
 
     async def _enhanced_research_with_memory(self, query: str) -> str:
         """Enhanced research with automatic content idea saving.
@@ -3402,5 +713,54 @@ class OrchestratorAgent(Agent):
                     )
         
         return research_result
+
+    async def _create_smart_cua_task(self, task_description: str, context: dict = None) -> str:
+        """Create an intelligently structured CUA task with optimized prompts.
+        
+        Args:
+            task_description: Natural language description of the task
+            context: Optional context dict with additional parameters
+            
+        Returns:
+            String message about task creation or execution instructions
+        """
+        self.logger.info(f"🧠 Creating smart CUA task: {task_description}")
+        
+        try:
+            # Import the smart prompt generator
+            from core.cua_instructions import create_smart_cua_task_prompt
+            
+            # Generate optimized prompt and parameters
+            prompt, start_url, max_iterations = create_smart_cua_task_prompt(
+                task_description, context or {}
+            )
+            
+            # Create the CuaTask object
+            task = CuaTask(
+                prompt=prompt,
+                start_url=start_url,
+                max_iterations=max_iterations
+            )
+            
+            # Log the task creation to memory
+            await self._log_action_to_memory(
+                action_type='smart_cua_task_created',
+                result='TASK_CREATED',
+                target=task_description,
+                details={
+                    'start_url': start_url, 
+                    'max_iterations': max_iterations,
+                    'context': context
+                }
+            )
+            
+            self.logger.info(f"✅ Smart CUA task created: {max_iterations} iterations, starting at {start_url}")
+            
+            # Return instructions for handoff
+            return f"Smart CUA task ready for execution. Use execute_cua_task with prompt='{prompt[:100]}...', start_url='{start_url}', max_iterations={max_iterations}"
+            
+        except Exception as e:
+            self.logger.error(f"Failed to create smart CUA task: {e}", exc_info=True)
+            return f"FAILED: Could not create CUA task - {str(e)}"
 
     # ==================== END MEMORY TOOLS ====================
