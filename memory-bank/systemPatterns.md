@@ -454,3 +454,136 @@ async def like_tweet_via_cua(self, tweet_url: str) -> str:
 *   **User Experience**: Predictable workflow execution improves overall system reliability
 
 *   **Rationale**: This pattern resolves fundamental limitations in CUA navigation capabilities by leveraging Playwright's strengths for navigation while preserving CUA's advantages for UI interaction, resulting in highly reliable browser automation workflows.
+
+## 15. Strategic Memory & MCP Server Integration Pattern
+
+*   **Objective**: Enable persistent, strategic memory for autonomous decision-making through Supabase MCP Server integration, transforming agents from reactive automation tools into learning, strategic entities.
+
+### 15.1. MCP Server Architecture
+
+*   **Server Type**: Supabase MCP Server for cloud-based PostgreSQL database integration
+*   **Integration Method**: OpenAI Agents SDK MCP server configuration via `core/config.py`
+*   **Access Pattern**: Agents access memory via MCP `execute_sql` tool for database operations
+*   **Schema Management**: Migration-driven database schema with versioned table structures
+
+#### Configuration Setup
+*   **Environment Variables**:
+    *   `SUPABASE_URL`: Project database endpoint
+    *   `SUPABASE_ANON_KEY`: Anonymous access key for MCP operations
+    *   `MCP_SERVER_CONFIG`: JSON configuration for SDK integration
+*   **Agent Integration**: MCP server configured as available tool for memory-enabled agents
+*   **Security**: Database access controlled via Supabase RLS policies and secure environment variable management
+
+### 15.2. Strategic Memory Schema
+
+#### Core Memory Tables
+```sql
+-- Agent action history for learning and deduplication
+CREATE TABLE agent_actions (
+    id SERIAL PRIMARY KEY,
+    action_type VARCHAR(50) NOT NULL,
+    target VARCHAR(500) NOT NULL,
+    result VARCHAR(100) NOT NULL,
+    metadata JSONB,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Content ideas from research for strategic use
+CREATE TABLE content_ideas (
+    id SERIAL PRIMARY KEY,
+    idea_text TEXT NOT NULL,
+    source VARCHAR(200),
+    topic_category VARCHAR(100),
+    relevance_score INTEGER,
+    used BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Tweet performance for strategy optimization
+CREATE TABLE tweet_performance (
+    id SERIAL PRIMARY KEY,
+    tweet_id VARCHAR(50) NOT NULL,
+    tweet_text TEXT,
+    likes_count INTEGER DEFAULT 0,
+    retweets_count INTEGER DEFAULT 0,
+    replies_count INTEGER DEFAULT 0,
+    impressions_count INTEGER DEFAULT 0,
+    posted_at TIMESTAMP WITH TIME ZONE,
+    last_updated TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- User interaction history for relationship management
+CREATE TABLE user_interactions (
+    id SERIAL PRIMARY KEY,
+    username VARCHAR(100) NOT NULL,
+    interaction_type VARCHAR(50) NOT NULL,
+    context TEXT,
+    sentiment VARCHAR(20),
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+```
+
+### 15.3. Memory-Driven Tool Implementation
+
+#### Core Memory Tools
+*   **`log_action_to_memory(action_type, target, result, metadata)`**:
+    *   Records every agent action (CUA, API, handoffs) for learning
+    *   Implementation: INSERT queries via Supabase MCP `execute_sql` tool
+    *   Usage: Called after every successful action completion
+*   **`retrieve_recent_actions_from_memory(action_type, limit, time_window)`**:
+    *   Queries action history to prevent duplication and inform decisions
+    *   Implementation: SELECT queries with temporal and type filtering
+    *   Usage: Before engaging with content/users to avoid repetition
+*   **`save_content_idea_to_memory(idea_text, source, topic_category, relevance_score)`**:
+    *   Stores promising content ideas discovered during research
+    *   Implementation: INSERT with metadata for strategic content pipeline
+    *   Usage: Research phases to build content backlog for future use
+
+#### Advanced Analytics Tools
+*   **`get_performance_insights_from_memory(metric_type, time_period)`**:
+    *   Analyzes historical performance data for strategic optimization
+    *   Implementation: Complex aggregation queries identifying success patterns
+    *   Usage: Strategic decision-making based on proven engagement patterns
+*   **`analyze_engagement_patterns(user_filter, content_type)`**:
+    *   User-specific interaction analysis for relationship optimization
+    *   Implementation: JOIN queries across actions and user_interactions tables
+    *   Usage: Personalizing engagement strategy based on relationship history
+
+### 15.4. Autonomous Decision-Making Enhancement
+
+#### Orchestrator Agent Integration
+*   **Memory-Informed Instructions**: Enhanced agent instructions incorporating historical success patterns
+*   **Decision Framework**: Strategic action selection based on:
+    *   Recent action history to avoid duplication
+    *   Performance insights to optimize content strategy
+    *   User interaction patterns for relationship building
+    *   Content idea pipeline for timely, relevant posting
+
+#### Strategic Action Selection
+*   **Hourly Decision Loop**: Scheduled autonomous operation with memory-guided choices:
+    *   [A] Research trending topics - informed by past successful content categories
+    *   [B] Engage with timeline - filtered by recent interactions to avoid spam
+    *   [C] Search conversations - guided by high-performing keywords and topics
+    *   [D] Review performance - analyze metrics and adjust strategy accordingly
+
+#### Learning Protocol
+*   **Continuous Improvement**: Every action outcome fed back into memory for strategy refinement
+*   **Pattern Recognition**: Identify optimal timing, content types, and engagement strategies
+*   **Relationship Building**: Long-term user interaction tracking for community development
+
+### 15.5. Implementation Benefits
+
+*   **Strategic Autonomy**: Agents make informed decisions based on historical data rather than reactive responses
+*   **Deduplication**: Memory prevents repetitive actions that could appear spammy or ineffective
+*   **Performance Optimization**: Data-driven strategy refinement based on actual engagement outcomes
+*   **Relationship Management**: Long-term community building through interaction history tracking
+*   **Content Pipeline**: Strategic content creation and posting based on research insights and performance data
+
+### 15.6. Integration with Existing Patterns
+
+*   **CUA-First Strategy**: Memory tools work seamlessly with both CUA and API interactions
+*   **HIL Framework**: Memory-driven decisions can trigger HIL approval for strategic choices
+*   **Multi-Agent Coordination**: Memory provides cross-agent context for coordinated decision-making
+*   **Error Handling**: Memory tracks failure patterns to improve reliability and strategy
+
+*   **Rationale**: This strategic memory pattern transforms the X Agentic Unit from reactive automation to proactive, learning intelligence, enabling true autonomous account management with continuous strategy optimization based on real-world performance data.

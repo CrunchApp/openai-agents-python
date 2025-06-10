@@ -379,6 +379,139 @@ IMPORTANT NOTES:
 - If you see a login page, respond with 'SESSION_INVALIDATED' immediately
 - Take screenshots between major steps to track progress"""
 
+def get_tweet_repost_prompt(tweet_url: str) -> str:
+    """Generate CUA prompt for reposting a tweet."""
+    return f"""You are on the page of the specific tweet you need to repost: {tweet_url}
+
+Your task is to perform a standard repost (not a 'Quote Post').
+
+Follow this two-step keyboard and mouse workflow:
+
+STEP 1 - TAKE INITIAL SCREENSHOT:
+Take a screenshot to see the current page state and confirm you're on the tweet page.
+
+STEP 2 - OPEN REPOST DIALOG:
+Press 't' to open the repost dialog menu. This is the keyboard shortcut.
+Wait 1-2 seconds for the dialog to appear.
+
+STEP 3 - CONFIRM REPOST:
+After the dialog appears, take a screenshot. The dialog will have two options: 'Repost' and 'Quote'.
+Press the ArrowDown key to select 'Repost' and then press the enter key to confirm.
+DO NOT click 'Quote' - we want a standard repost.
+
+STEP 4 - VERIFY SUCCESS:
+Take a final screenshot. Look for a confirmation message like 'Your post was sent' or see if the repost icon on the original tweet changes color (e.g., to green).
+
+RESPONSE FORMATS:
+- 'SUCCESS: Tweet at {tweet_url} was successfully reposted.'
+- 'FAILED: Could not repost tweet. [Reason, e.g., repost dialog did not appear, confirmation button not found].'
+- 'SESSION_INVALIDATED' (if you see a login screen).
+
+FALLBACK OPTION (only if keyboard shortcut fails):
+If the 't' keyboard shortcut doesn't work, look for the repost/retweet icon (usually two curved arrows) and click it directly.
+The repost icon is usually located below the tweet text, in the row of action buttons.
+
+IMPORTANT NOTES:
+- If you see a cookie consent banner, dismiss it first before reposting
+- The 't' shortcut should work immediately without clicking anywhere first
+- If you see a login page, respond with 'SESSION_INVALIDATED' immediately
+- Take screenshots between major steps to track progress
+- Ensure you click 'Repost' not 'Quote' when the dialog appears"""
+
+def get_user_follow_prompt(profile_url: str) -> str:
+    """Generate CUA prompt for following a user."""
+    return f"""You are on the X.com profile page of a user you need to follow. Your task is to click the 'Follow' button.
+
+Follow this workflow:
+
+STEP 1 - TAKE INITIAL SCREENSHOT:
+Take a screenshot to see the current page state and confirm you're on the user's profile page.
+
+STEP 2 - LOCATE FOLLOW BUTTON:
+Visually scan the profile page, typically near the top right area, for a button with the text 'Follow'. 
+It is usually a prominent button, often with a colored background (blue or black).
+The Follow button is commonly located next to or near the user's profile information (name, bio, etc.).
+
+STEP 3 - CLICK FOLLOW:
+Execute a mouse click directly on the 'Follow' button you identified.
+This action requires a precise click on the button.
+
+STEP 4 - VERIFY SUCCESS:
+Wait 1-2 seconds for the UI to update.
+Take a final screenshot. The button you just clicked should now have changed its text to 'Following'.
+Visually confirm this change - the button should show 'Following' instead of 'Follow'.
+
+RESPONSE FORMATS:
+- 'SUCCESS: Successfully followed user at {profile_url}.'
+- 'FAILED: Could not follow user. [Reason, e.g., Follow button not found, button text did not change to Following].'
+- 'SESSION_INVALIDATED' (if you see a login screen).
+
+ALTERNATIVE SCENARIOS:
+- If the button already shows 'Following', respond with 'SUCCESS: User is already being followed.'
+- If you see 'Blocked' or similar restrictive states, respond with 'FAILED: Cannot follow user due to account restrictions.'
+- If the profile appears to be private and requires approval, the button might change to 'Requested' - this is also a success.
+
+IMPORTANT NOTES:
+- If you see a cookie consent banner, dismiss it first before attempting to follow
+- The Follow button is typically prominent and easy to locate on profile pages
+- If you see a login page, respond with 'SESSION_INVALIDATED' immediately
+- Take screenshots between major steps to track progress
+- Be precise with your click to ensure you hit the Follow button accurately"""
+
+def get_search_x_prompt(query: str, num_results: int) -> str:
+    """Generate CUA prompt for searching X.com for a topic."""
+    return f"""Your task is to search X.com for the query '{query}' and extract the text of the top {num_results} search results.
+
+Follow this keyboard-first workflow:
+
+STEP 1 - TAKE INITIAL SCREENSHOT:
+Take a screenshot to see the current page state.
+
+STEP 2 - FOCUS SEARCH BAR:
+Press the '/' key to move focus directly to the search bar.
+This is X.com's keyboard shortcut to focus the search input field.
+Wait 1 second for the focus to activate.
+
+STEP 3 - EXECUTE SEARCH:
+Type the query '{query}' into the search bar.
+Then press 'Enter' to execute the search.
+Wait 2-3 seconds for the search results page to load.
+
+STEP 4 - VERIFY SEARCH RESULTS:
+Take a screenshot to confirm you see a list of tweets related to your search.
+You should be on a search results page showing tweets that match your query.
+The page should show multiple tweet results in a timeline-like format.
+
+STEP 5 - EXTRACT RESULTS:
+Similar to reading a timeline, identify the first tweet in the search results and extract its text.
+Focus on the main tweet content, ignoring usernames, timestamps, and interaction counts.
+Then, press 'j' to move to the next result and extract its text.
+Repeat this until you have {num_results} tweets.
+
+Navigation pattern:
+- Start with the first visible search result
+- Press 'j' to move to each subsequent result
+- Extract only the main text content of each tweet
+- Continue until you have {num_results} tweet texts
+
+STEP 6 - COMPILE RESULTS:
+Create a JSON array with the extracted tweet texts from the search results.
+
+FINAL RESPONSE FORMAT:
+Your final response MUST be a JSON string representing a list of the tweet texts you extracted. Example for 2 results:
+SUCCESS: ["Text of first search result tweet...", "Text of second search result tweet..."]
+
+If you fail, respond with 'FAILED: [Reason]' or 'SESSION_INVALIDATED'.
+
+IMPORTANT NOTES:
+- Use keyboard navigation ('/' for search, 'j' for next result) whenever possible
+- Focus only on extracting the main tweet text content
+- Ignore usernames, timestamps, like counts, reply counts, etc.
+- If you see a cookie consent banner, dismiss it first
+- If you encounter a login screen, respond with 'SESSION_INVALIDATED'
+- Take screenshots between major steps to track progress
+- If search returns no results, respond with 'FAILED: No search results found for query'"""
+
 def get_timeline_reading_prompt(num_tweets: int) -> str:
     """Generate CUA prompt for reading timeline tweets."""
     return f"""Your task is to read the text content of the top {num_tweets} tweets from your home timeline. You are already logged in and the viewport has been pre-stabilized.
