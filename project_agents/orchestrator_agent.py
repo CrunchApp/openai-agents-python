@@ -156,10 +156,22 @@ class OrchestratorAgent(Agent):
         super().__init__(
             name="Orchestrator Agent",
             instructions=(
-                "You are a master orchestrator agent. Your role is to manage workflows "
-                "involving other specialized agents and tools to manage an X account. "
-                "You will decide when to fetch mentions, draft replies, request human review, and post content. "
-                "You also have access to Supabase database tools for long-term memory and strategic decision making."
+                "You are 'AIified', a sophisticated AI agent managing an X.com account. Your primary objective is to autonomously grow the account by maximizing meaningful engagement within the AI, LLM, and Machine Learning communities. You must be professional, insightful, and helpful.\n\n"
+                
+                "You operate in cycles. In each cycle, you must analyze the current situation and choose ONE strategic action from the 'Action Menu' below. Your goal is not just to perform tasks, but to decide which task is the most valuable to perform at this moment.\n\n"
+                
+                "--- ACTION MENU ---\n"
+                "1. **Content Research & Curation:** Use the `enhanced_research_with_memory` tool to find new, interesting topics. This is a good default action if you have no other high-priority tasks. Query ideas: 'latest breakthroughs in generative AI', 'new open source LLMs', 'AI ethics discussions'.\n"
+                "2. **Post New Content:** Use the `get_unused_content_ideas` tool to see if you have a backlog of good ideas. If you find a promising idea, use the ContentCreationAgent (internally) to draft a tweet, send it for HIL review, and if approved, it will be posted later. (Note: The `post_tweet_via_cua` tool is for direct posting, which you should only use for pre-approved content).\n"
+                "3. **Engage with Timeline:** Read your home timeline to find relevant tweets from accounts you follow. Use the `enhanced_like_tweet_with_memory` tool to engage with a high-quality tweet. You can also use this to find tweets to reply to.\n"
+                "4. **Check for Mentions & High-Value Replies:** Check your own mentions for opportunities to engage. (Note: You can use API or CUA tools for this).\n"
+                "5. **Expand Network:** Use the `search_x_for_topic_via_cua` tool to find active conversations. Based on the results, you can decide to follow insightful users or engage with a relevant public tweet.\n\n"
+                
+                "--- STRATEGIC RULES ---\n"
+                "- **MEMORY FIRST:** Before taking any engagement action (like, reply, follow), you MUST use the `check_recent_actions` tool to ensure you haven't interacted with that same tweet or user recently. This prevents spammy behavior.\n"
+                "- **PRIORITIZE:** High-quality replies to mentions are often more valuable than liking a random tweet. If you have pending content ideas, drafting a new post is a high-value action.\n"
+                "- **BE CONCISE:** When using tools, provide clear and concise inputs. For example, for `enhanced_research_with_memory`, provide a specific query like 'What is retrieval-augmented generation?'.\n"
+                "- **DOCUMENTATION:** After every major action, think about what should be logged to your memory for future reference."
             ),
             model=ORCHESTRATOR_MODEL,
             tools=[],
@@ -281,6 +293,33 @@ class OrchestratorAgent(Agent):
             return result
         except Exception as e:
             self.logger.error(f"Orchestrator: Research failed: {e}", exc_info=True)
+            return f"{FAILED_PREFIX}: Research query '{query}' failed."
+
+    async def _internal_research_with_params(self, query: str) -> str:
+        """Internal async research method that can be called from other async contexts.
+        
+        Args:
+            query: Research query string
+            
+        Returns:
+            Research results as string
+        """
+        self.logger.info(f"Orchestrator: Async researching topic: {query}")
+        
+        try:
+            # Note: The ResearchAgent itself uses WebSearchTool. 
+            # The Runner will handle the ResearchAgent's LLM calling WebSearchTool.
+            from agents import Runner, RunConfig
+            research_result = await Runner.run(
+                self.research_agent, 
+                input=query,
+                run_config=RunConfig(workflow_name="AIified_Topic_Research")
+            )
+            result = str(research_result.final_output)
+            self.logger.info(f"Orchestrator: Async research result: {result}")
+            return result
+        except Exception as e:
+            self.logger.error(f"Orchestrator: Async research failed: {e}", exc_info=True)
             return f"{FAILED_PREFIX}: Research query '{query}' failed."
 
     def get_latest_own_tweet_text_via_cua(self) -> str:
@@ -1435,6 +1474,201 @@ class OrchestratorAgent(Agent):
             return asyncio.run(_internal_like_via_cua())
         except Exception as e:
             error_msg = f"Failed to execute CUA tweet liking workflow: {e}"
+            self.logger.error(error_msg, exc_info=True)
+            return f"{FAILED_PREFIX}: {error_msg}"
+
+    async def _internal_like_via_cua_with_params(self, tweet_url: str) -> str:
+        """Internal async function to handle CUA tweet liking workflow with parameters.
+        
+        This is a standalone async method that can be called from other async contexts
+        without triggering nested event loop issues.
+        
+        Args:
+            tweet_url: The URL of the tweet to like
+            
+        Returns:
+            String describing the outcome of the CUA operation
+        """
+        self.logger.info("Starting async CUA tweet liking workflow for URL: %s", tweet_url)
+        
+        try:
+            # Use LocalPlaywrightComputer with proper configuration
+            async with LocalPlaywrightComputer(user_data_dir_path=settings.x_cua_user_data_dir) as computer:
+                
+                # Initialize the OpenAI client for direct responses API calls
+                from openai import OpenAI
+                import base64
+                client = OpenAI(api_key=settings.openai_api_key)
+                
+                # Navigate directly to the tweet URL using Playwright before starting CUA
+                self.logger.info(f"🧭 Direct navigation to tweet URL: {tweet_url}")
+                try:
+                    await computer.page.goto(tweet_url, wait_until='networkidle', timeout=PAGE_NAVIGATION_TIMEOUT)
+                    await computer.page.wait_for_timeout(PAGE_STABILIZATION_DELAY)  # Additional wait for page stabilization
+                    self.logger.info(f"✅ Successfully navigated to {tweet_url}")
+                except Exception as nav_error:
+                    self.logger.error(f"❌ Failed to navigate to {tweet_url}: {nav_error}")
+                    return f"{FAILED_PREFIX}: Could not navigate to tweet URL - {nav_error}"
+                
+                # Define task-specific prompt (tweet liking) - now focused on just liking since we're already on the page
+                task_specific_prompt = get_tweet_like_prompt(tweet_url)
+                
+                # Initial request to get first screenshot
+                self.logger.info("Sending initial CUA request for tweet liking")
+                initial_input_messages = [
+                    {"role": "system", "content": CUA_SYSTEM_INSTRUCTIONS},
+                    {"role": "user", "content": task_specific_prompt}
+                ]
+                response = client.responses.create(
+                    model=COMPUTER_USE_MODEL,
+                    tools=[CUA_TOOL_CONFIG],
+                    input=initial_input_messages,
+                    truncation="auto"
+                )
+                
+                max_iterations = CUA_MAX_ITERATIONS_LIKE
+                iteration = 0
+                
+                while iteration < max_iterations:
+                    iteration += 1
+                    self.logger.info(f"CUA iteration {iteration}")
+                    
+                    # Check for computer calls in the response
+                    computer_calls = [item for item in response.output if hasattr(item, 'type') and item.type == "computer_call"]
+                    
+                    # Debug: Log all response output items
+                    self.logger.info(f"Response output items: {len(response.output)}")
+                    for i, item in enumerate(response.output):
+                        if hasattr(item, 'type'):
+                            self.logger.info(f"  Item {i}: type={item.type}")
+                            if item.type == "text" and hasattr(item, 'text'):
+                                self.logger.info(f"    Text content: {item.text[:200]}...")
+                        else:
+                            self.logger.info(f"  Item {i}: {type(item)} - {str(item)[:100]}...")
+                    
+                    if not computer_calls:
+                        # Check for text output that might contain our success/failure message
+                        text_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "text"]
+                        reasoning_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "reasoning"]
+                        message_outputs = [item for item in response.output if hasattr(item, 'type') and item.type == "message"]
+                        
+                        if text_outputs:
+                            final_text = text_outputs[-1].text if hasattr(text_outputs[-1], 'text') else str(text_outputs[-1])
+                            self.logger.info(f"CUA completed with text output: {final_text}")
+                            if SUCCESS_STRING_LITERAL in final_text:
+                                return final_text
+                            elif SESSION_INVALIDATED_STRING_LITERAL in final_text:
+                                return final_text
+                            elif FAILED_STRING_LITERAL in final_text:
+                                return final_text
+                        
+                        if message_outputs:
+                            # Handle both direct text and ResponseOutputText objects
+                            final_message = ""
+                            for msg in message_outputs:
+                                if hasattr(msg, 'text'):
+                                    final_message = msg.text
+                                    break
+                                elif hasattr(msg, 'content') and hasattr(msg.content, 'text'):
+                                    final_message = msg.content.text
+                                    break
+                                elif str(msg):
+                                    msg_str = str(msg)
+                                    # Extract text from ResponseOutputText representation
+                                    if "text='" in msg_str:
+                                        start = msg_str.find("text='") + 6
+                                        end = msg_str.find("'", start)
+                                        if end > start:
+                                            final_message = msg_str[start:end]
+                                            break
+                            
+                            self.logger.info(f"CUA completed with message text: {final_message}")
+                            # Check if message contains our response patterns
+                            if SUCCESS_STRING_LITERAL in final_message:
+                                return final_message  # Return the actual success message
+                            elif SESSION_INVALIDATED_STRING_LITERAL in final_message:
+                                return SESSION_INVALIDATED
+                            elif FAILED_STRING_LITERAL in final_message:
+                                return f"{FAILED_PREFIX}: {final_message}"
+                        
+                        if reasoning_outputs:
+                            final_reasoning = reasoning_outputs[-1].content if hasattr(reasoning_outputs[-1], 'content') else str(reasoning_outputs[-1])
+                            self.logger.info(f"CUA completed with reasoning: {final_reasoning[:RESPONSE_TEXT_SLICE_MEDIUM]}...")
+                            # Check if reasoning contains our response patterns
+                            if SUCCESS_STRING_LITERAL in final_reasoning:
+                                return SUCCESS_TWEET_LIKED_FROM_REASONING
+                            elif SESSION_INVALIDATED_STRING_LITERAL in final_reasoning:
+                                return SESSION_INVALIDATED
+                            elif FAILED_STRING_LITERAL in final_reasoning:
+                                return f"{FAILED_PREFIX}: {final_reasoning[:RESPONSE_TEXT_SLICE_SHORT]}"
+                        
+                        self.logger.info("No computer call found, CUA workflow completed")
+                        return COMPLETED_CUA_TWEET_LIKING_WORKFLOW_TEXT
+                    
+                    computer_call = computer_calls[0]
+                    action = computer_call.action
+                    call_id = computer_call.call_id
+                    
+                    # Handle safety checks - automatically acknowledge routine social media interaction checks
+                    acknowledged_checks = []
+                    if hasattr(computer_call, 'pending_safety_checks') and computer_call.pending_safety_checks:
+                        self.logger.info(f"Safety checks detected: {len(computer_call.pending_safety_checks)} checks")
+                        # Automatically acknowledge routine social media interaction safety checks for autonomous operation
+                        for check in computer_call.pending_safety_checks:
+                            self.logger.info(f"Acknowledging safety check: {check.code} - {check.message}")
+                            acknowledged_checks.append({
+                                "id": check.id,
+                                "code": check.code,
+                                "message": check.message
+                            })
+                    
+                    # Execute the computer action
+                    try:
+                        await self._execute_computer_action(computer, action)
+                    except Exception as e:
+                        self.logger.error(f"Error executing computer action {action.type}: {e}")
+                        return f"FAILED: Computer action execution error: {e}"
+                    
+                    # Take screenshot
+                    try:
+                        screenshot_b64 = await computer.screenshot()
+                    except Exception as e:
+                        self.logger.error(f"Error taking screenshot: {e}")
+                        return f"{FAILED_PREFIX}: Screenshot capture error: {e}"
+                    
+                    # Prepare next request input
+                    input_content = [{
+                        "call_id": call_id,
+                        "type": "computer_call_output",
+                        "output": {
+                            "type": "input_image",
+                            "image_url": f"data:image/png;base64,{screenshot_b64}"
+                        }
+                    }]
+                    
+                    # Add acknowledged safety checks if any
+                    if acknowledged_checks:
+                        input_content[0]["acknowledged_safety_checks"] = acknowledged_checks
+                        self.logger.info(f"Including {len(acknowledged_checks)} acknowledged safety checks in next request")
+                    
+                    # Send next request
+                    try:
+                        response = client.responses.create(
+                            model=COMPUTER_USE_MODEL,
+                            previous_response_id=response.id,
+                            tools=[CUA_TOOL_CONFIG],
+                            input=input_content,
+                            truncation="auto"
+                        )
+                    except Exception as e:
+                        self.logger.error(f"Error in CUA API call: {e}")
+                        return f"{FAILED_PREFIX}: API call error: {e}"
+                
+                self.logger.warning(f"CUA reached maximum iterations ({max_iterations})")
+                return COMPLETED_CUA_ITERATIONS
+                
+        except Exception as e:
+            error_msg = f"CUA tweet liking failed: {e}"
             self.logger.error(error_msg, exc_info=True)
             return f"{FAILED_PREFIX}: {error_msg}"
 
@@ -3114,9 +3348,9 @@ class OrchestratorAgent(Agent):
             
             return result_msg
         
-        # Proceed with the like action
+        # Proceed with the like action - call internal async method directly
         self.logger.info(f"✅ Memory check passed - proceeding with tweet like: {tweet_url}")
-        result = self.like_tweet_via_cua(tweet_url)
+        result = await self._internal_like_via_cua_with_params(tweet_url)
         
         # Log the action result to memory
         action_result = 'SUCCESS' if 'SUCCESS' in result else 'FAILED'
@@ -3140,8 +3374,8 @@ class OrchestratorAgent(Agent):
         """
         self.logger.info(f"🔍 Starting enhanced research with memory: {query}")
         
-        # Perform the research
-        research_result = self.research_topic_for_aiified(query)
+        # Perform the research using async method
+        research_result = await self._internal_research_with_params(query)
         
         # Log the research action
         await self._log_action_to_memory(

@@ -29,6 +29,17 @@ def run_approved_replies_job() -> None:
     except Exception as e:
         logger.error("Error running orchestrator approved replies workflow: %s", e)
 
+
+def run_autonomous_cycle_job() -> None:
+    """Runs the Orchestrator's main autonomous decision-making cycle."""
+    logger.info("Scheduler triggering autonomous action cycle for OrchestratorAgent...")
+    orchestrator = OrchestratorAgent()
+    try:
+        # The input prompt is high-level, triggering the agent to use its new instructions.
+        asyncio.run(Runner.run(orchestrator, input="New action cycle: Assess the situation and choose a strategic action based on your goals."))
+    except Exception as e:
+        logger.error("Error running autonomous orchestrator cycle: %s", e)
+
 class SchedulingAgent(Agent):
     """Agent responsible for scheduling the OrchestratorAgent workflows."""
 
@@ -95,4 +106,28 @@ class SchedulingAgent(Agent):
             )
         except Exception as e:
             self.logger.error("Failed to schedule approved replies job: %s", e)
+            raise
+
+    def schedule_autonomous_cycle(self, interval_minutes: int = 60) -> None:
+        """Schedule the autonomous decision-making cycle at fixed intervals.
+
+        Args:
+            interval_minutes: Interval in minutes between autonomous cycles (default: 60).
+        """
+        try:
+            job_id = "autonomous_cycle_job"
+            self.scheduler.add_job(
+                run_autonomous_cycle_job,
+                trigger="interval",
+                minutes=interval_minutes,
+                id=job_id,
+                replace_existing=True,
+            )
+            self.logger.info(
+                "Scheduled job '%s' to run every %d minutes.",
+                job_id,
+                interval_minutes,
+            )
+        except Exception as e:
+            self.logger.error("Failed to schedule autonomous cycle job: %s", e)
             raise

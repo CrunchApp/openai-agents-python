@@ -28,7 +28,7 @@ async def log_action_to_memory(
     
     Args:
         server: The MCP server instance for Supabase connection
-        agent_name: Name of the agent performing the action
+        agent_name: Name of the agent performing the action (will be stored in metadata)
         action_type: Type of action (e.g., 'like_tweet', 'post_tweet', 'follow_user')
         result: Result of the action ('SUCCESS', 'FAILED', 'IN_PROGRESS')
         target: Target of the action (URL, username, query, etc.)
@@ -43,33 +43,30 @@ async def log_action_to_memory(
     logger.info(f"📝 Logging action to memory: {action_type} -> {result}")
     
     try:
-        # Prepare the SQL query with parameterized inputs
-        sql_query = """
-        INSERT INTO agent_actions (agent_name, action_type, target, result, metadata, timestamp)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        # Prepare metadata - include agent_name in metadata since the table doesn't have that column
+        metadata = details or {}
+        metadata['agent_name'] = agent_name
+        metadata_json = json.dumps(metadata)
+        
+        # Build SQL query with values directly embedded (MCP doesn't support parameterized queries)
+        # Use single quotes and escape any single quotes in the values
+        target_escaped = target.replace("'", "''") if target else ""
+        result_escaped = result.replace("'", "''")
+        action_type_escaped = action_type.replace("'", "''")
+        metadata_escaped = metadata_json.replace("'", "''")
+        
+        sql_query = f"""
+        INSERT INTO agent_actions (action_type, target, result, metadata, timestamp)
+        VALUES ('{action_type_escaped}', '{target_escaped}', '{result_escaped}', '{metadata_escaped}', NOW())
         RETURNING id, timestamp;
         """
         
-        # Prepare parameters
-        timestamp = datetime.now(timezone.utc).isoformat()
-        metadata_json = json.dumps(details) if details else None
-        
-        params = [
-            agent_name,
-            action_type, 
-            target,
-            result,
-            metadata_json,
-            timestamp
-        ]
-        
-        # Execute the SQL via MCP server
+        # Execute the SQL via MCP server (no params needed)
         result_data = await server.call_tool(
             "execute_sql",
             {
                 "project_id": "vgqkwooelncsckghajpg",  # Our AIified project ID
-                "query": sql_query,
-                "params": params
+                "query": sql_query
             }
         )
         
@@ -104,40 +101,53 @@ async def retrieve_recent_actions_from_memory(
     logger.info(f"🔍 Retrieving recent actions: type={action_type}, hours={hours_back}")
     
     try:
-        # Build the SQL query based on filters
-        # Note: PostgreSQL doesn't support parameterized intervals, so we'll use string formatting for hours
+        # Build the SQL query based on filters (no parameterized queries)
         if action_type:
+            action_type_escaped = action_type.replace("'", "''")
             sql_query = f"""
-            SELECT id, agent_name, action_type, target, result, metadata, timestamp
+            SELECT id, action_type, target, result, metadata, timestamp
             FROM agent_actions
-            WHERE action_type = $1 
+            WHERE action_type = '{action_type_escaped}' 
             AND timestamp > NOW() - INTERVAL '{hours_back} hours'
             ORDER BY timestamp DESC
-            LIMIT $2;
+            LIMIT {limit};
             """
-            params = [action_type, limit]
         else:
             sql_query = f"""
-            SELECT id, agent_name, action_type, target, result, metadata, timestamp
+            SELECT id, action_type, target, result, metadata, timestamp
             FROM agent_actions  
             WHERE timestamp > NOW() - INTERVAL '{hours_back} hours'
             ORDER BY timestamp DESC
-            LIMIT $1;
+            LIMIT {limit};
             """
-            params = [limit]
         
         # Execute the SQL via MCP server
         result_data = await server.call_tool(
             "execute_sql",
             {
                 "project_id": "vgqkwooelncsckghajpg", 
-                "query": sql_query,
-                "params": params
+                "query": sql_query
             }
         )
         
-        # Parse the result
-        actions = result_data if isinstance(result_data, list) else []
+        logger.info(f"🔍 Raw MCP result: {result_data}")
+        logger.info(f"🔍 Result type: {type(result_data)}")
+        
+        # Parse the MCP CallToolResult - extract JSON from TextContent
+        actions = []
+        if hasattr(result_data, 'content') and result_data.content:
+            for content_item in result_data.content:
+                if hasattr(content_item, 'text'):
+                    try:
+                        json_data = json.loads(content_item.text)
+                        if isinstance(json_data, list):
+                            actions = json_data
+                        break
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON: {e}")
+                        logger.error(f"Raw text: {content_item.text}")
+        
+        logger.info(f"🔍 Parsed {len(actions)} actions from result")
         
         logger.info(f"✅ Retrieved {len(actions)} recent actions")
         return {
@@ -179,33 +189,38 @@ async def save_content_idea_to_memory(
     logger.info(f"💡 Saving content idea to memory: {idea_summary[:50]}...")
     
     try:
-        # Note: Based on our schema verification, the table uses different column names
-        # than specified in the original request. Using actual schema column names.
-        sql_query = """
-        INSERT INTO content_ideas (idea_text, source, topic_category, relevance_score, created_at)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, created_at;
-        """
-        
-        # Prepare parameters - combine source_url and source_query into source field
+        # Prepare values - escape single quotes
+        idea_escaped = idea_summary.replace("'", "''")
         source = source_url or source_query or "research"
-        timestamp = datetime.now(timezone.utc).isoformat()
+        source_escaped = source.replace("'", "''")
         
-        params = [
-            idea_summary,
-            source,
-            topic_category,
-            relevance_score,
-            timestamp
-        ]
+        # Build the SQL query with values directly embedded
+        sql_query = f"""
+        INSERT INTO content_ideas (idea_text, source, topic_category, relevance_score, created_at)
+        VALUES ('{idea_escaped}', '{source_escaped}', """
+        
+        # Handle optional values
+        if topic_category:
+            topic_escaped = topic_category.replace("'", "''")
+            sql_query += f"'{topic_escaped}'"
+        else:
+            sql_query += "NULL"
+        
+        sql_query += ", "
+        
+        if relevance_score is not None:
+            sql_query += str(relevance_score)
+        else:
+            sql_query += "NULL"
+        
+        sql_query += ", NOW()) RETURNING id, created_at;"
         
         # Execute the SQL via MCP server
         result_data = await server.call_tool(
             "execute_sql",
             {
                 "project_id": "vgqkwooelncsckghajpg",
-                "query": sql_query,
-                "params": params
+                "query": sql_query
             }
         )
         
@@ -240,40 +255,51 @@ async def get_unused_content_ideas_from_memory(
     try:
         # Build the SQL query based on filters
         if topic_category:
-            sql_query = """
+            topic_escaped = topic_category.replace("'", "''")
+            sql_query = f"""
             SELECT id, idea_text, source, topic_category, relevance_score, created_at
             FROM content_ideas
-            WHERE used = false AND topic_category = $1
+            WHERE used = false AND topic_category = '{topic_escaped}'
             ORDER BY relevance_score DESC, created_at DESC
-            LIMIT $2;
+            LIMIT {limit};
             """
-            params = [topic_category, limit]
         else:
-            sql_query = """
+            sql_query = f"""
             SELECT id, idea_text, source, topic_category, relevance_score, created_at
             FROM content_ideas
             WHERE used = false
             ORDER BY relevance_score DESC, created_at DESC
-            LIMIT $1;
+            LIMIT {limit};
             """
-            params = [limit]
         
         # Execute the SQL via MCP server
         result_data = await server.call_tool(
             "execute_sql",
             {
                 "project_id": "vgqkwooelncsckghajpg",
-                "query": sql_query,
-                "params": params
+                "query": sql_query
             }
         )
         
-        # Parse the result
-        ideas = result_data if isinstance(result_data, list) else []
+        # Parse the MCP CallToolResult - extract JSON from TextContent
+        ideas = []
+        if hasattr(result_data, 'content') and result_data.content:
+            for content_item in result_data.content:
+                if hasattr(content_item, 'text'):
+                    try:
+                        json_data = json.loads(content_item.text)
+                        if isinstance(json_data, list):
+                            ideas = json_data
+                        break
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON: {e}")
+                        logger.error(f"Raw text: {content_item.text}")
+        
+        logger.info(f"🔍 Parsed {len(ideas)} ideas from result")
         
         logger.info(f"✅ Retrieved {len(ideas)} unused content ideas")
         return {
-            "success": True,
+            "success": True, 
             "ideas": ideas,
             "count": len(ideas),
             "filters": {"topic_category": topic_category}
@@ -303,22 +329,19 @@ async def mark_content_idea_as_used(
     logger.info(f"✔️ Marking content idea {idea_id} as used")
     
     try:
-        sql_query = """
+        sql_query = f"""
         UPDATE content_ideas
         SET used = true
-        WHERE id = $1
+        WHERE id = {idea_id}
         RETURNING id, idea_text;
         """
-        
-        params = [idea_id]
         
         # Execute the SQL via MCP server
         result_data = await server.call_tool(
             "execute_sql",
             {
                 "project_id": "vgqkwooelncsckghajpg",
-                "query": sql_query,
-                "params": params
+                "query": sql_query
             }
         )
         
@@ -353,13 +376,17 @@ async def check_recent_target_interactions(
     logger.info(f"🔍 Checking recent interactions with target: {target}")
     
     try:
+        # Escape the target value
+        target_escaped = target.replace("'", "''")
+        
         # Build the SQL query based on filters
         if action_types:
-            action_types_str = "', '".join(action_types)
+            action_types_escaped = [action_type.replace("'", "''") for action_type in action_types]
+            action_types_str = "', '".join(action_types_escaped)
             sql_query = f"""
             SELECT id, action_type, result, timestamp, metadata
             FROM agent_actions
-            WHERE target = $1 
+            WHERE target = '{target_escaped}' 
             AND action_type IN ('{action_types_str}')
             AND timestamp > NOW() - INTERVAL '{hours_back} hours'
             ORDER BY timestamp DESC;
@@ -368,31 +395,54 @@ async def check_recent_target_interactions(
             sql_query = f"""
             SELECT id, action_type, result, timestamp, metadata
             FROM agent_actions
-            WHERE target = $1
+            WHERE target = '{target_escaped}'
             AND timestamp > NOW() - INTERVAL '{hours_back} hours'
             ORDER BY timestamp DESC;
             """
         
-        params = [target]
+        logger.info(f"🔍 Memory query: {sql_query}")
         
         # Execute the SQL via MCP server
         result_data = await server.call_tool(
             "execute_sql",
             {
                 "project_id": "vgqkwooelncsckghajpg",
-                "query": sql_query,
-                "params": params
+                "query": sql_query
             }
         )
         
-        # Parse the result and generate recommendations
-        interactions = result_data if isinstance(result_data, list) else []
+        logger.info(f"🔍 Raw MCP result: {result_data}")
+        logger.info(f"🔍 Result type: {type(result_data)}")
+        
+        # Parse the MCP CallToolResult - extract JSON from TextContent
+        interactions = []
+        if hasattr(result_data, 'content') and result_data.content:
+            for content_item in result_data.content:
+                if hasattr(content_item, 'text'):
+                    try:
+                        json_data = json.loads(content_item.text)
+                        if isinstance(json_data, list):
+                            interactions = json_data
+                        break
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to parse JSON: {e}")
+                        logger.error(f"Raw text: {content_item.text}")
+        
+        logger.info(f"🔍 Parsed {len(interactions)} interactions from result")
+        
         interaction_count = len(interactions)
         
-        # Simple spam prevention logic
-        should_skip = interaction_count >= 3  # More than 3 interactions in timeframe
+        # More aggressive spam prevention - skip if ANY recent interaction exists for like_tweet
+        if action_types and 'like_tweet' in action_types:
+            should_skip = interaction_count >= 1  # Skip if any like_tweet interaction in timeframe
+        else:
+            should_skip = interaction_count >= 3  # More than 3 interactions for other actions
         
         logger.info(f"✅ Found {interaction_count} recent interactions with {target}")
+        if interactions:
+            interaction_summary = [f"{i['action_type']}({i['result']})" for i in interactions[:3]]
+            logger.info(f"   Recent interactions: {interaction_summary}")
+        
         return {
             "success": True,
             "target": target,
