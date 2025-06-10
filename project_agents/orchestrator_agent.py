@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from agents import Agent, ModelSettings, RunContextWrapper, function_tool, Runner, ComputerTool
+from agents.mcp.server import MCPServerStdio
 from core.config import settings
 from core.constants import (
     COMPLETED_PREFIX,
@@ -112,6 +113,14 @@ from project_agents.research_agent import ResearchAgent
 from project_agents.x_interaction_agent import XInteractionAgent
 from tools.human_handoff_tool import _request_human_review_impl as call_request_human_review, DraftedReplyData
 from tools.x_api_tools import XApiError, get_mentions, post_text_tweet as _post_text_tweet
+from tools.memory_tools import (
+    log_action_to_memory,
+    retrieve_recent_actions_from_memory,
+    save_content_idea_to_memory,
+    get_unused_content_ideas_from_memory,
+    mark_content_idea_as_used,
+    check_recent_target_interactions,
+)
 from pydantic import ValidationError
 
 
@@ -120,20 +129,42 @@ class OrchestratorAgent(Agent):
 
     def __init__(self) -> None:
         """Initialize the Orchestrator Agent with logger and sub-agents."""
+        self.logger = logging.getLogger(__name__)
+        self.content_creation_agent = ContentCreationAgent()
+        self.research_agent = ResearchAgent()
+        self.x_interaction_agent = XInteractionAgent()
+
+        # Initialize the Supabase MCP Server connection
+        self.supabase_mcp_server = MCPServerStdio(
+            params={
+                "command": "cmd",
+                "args": [
+                    "/c",
+                    "npx",
+                    "-y",
+                    "@supabase/mcp-server-supabase@latest",
+                    "--access-token",
+                    settings.supabase_access_token
+                ]
+            },
+            # Cache the tool list for performance. We can invalidate it later if needed.
+            cache_tools_list=True,
+            # Increase timeout for Supabase server startup
+            client_session_timeout_seconds=15.0
+        )
+
         super().__init__(
             name="Orchestrator Agent",
             instructions=(
                 "You are a master orchestrator agent. Your role is to manage workflows "
                 "involving other specialized agents and tools to manage an X account. "
-                "You will decide when to fetch mentions, draft replies, request human review, and post content."
+                "You will decide when to fetch mentions, draft replies, request human review, and post content. "
+                "You also have access to Supabase database tools for long-term memory and strategic decision making."
             ),
             model=ORCHESTRATOR_MODEL,
             tools=[],
+            mcp_servers=[self.supabase_mcp_server],
         )
-        self.logger = logging.getLogger(__name__)
-        self.content_creation_agent = ContentCreationAgent()
-        self.research_agent = ResearchAgent()
-        self.x_interaction_agent = XInteractionAgent()
 
         # Expose process_new_mentions_workflow as a tool for LLM-driven orchestration
         @function_tool(
@@ -164,6 +195,48 @@ class OrchestratorAgent(Agent):
                 tool_description="Searches the web for recent news, developments, or interesting topics in AI, LLMs, and Machine Learning. Input should be a specific query or 'general latest AI news'."
             )
         )
+
+        # Add memory-driven decision tools
+        @function_tool(
+            name_override="enhanced_like_tweet_with_memory",
+            description_override="Like a tweet with memory-driven spam prevention. Checks recent interactions to avoid overengaging with the same target.",
+        )
+        async def _enhanced_like_tweet_with_memory_tool(ctx: RunContextWrapper[Any], tweet_url: str) -> str:
+            """Tool wrapper for enhanced tweet liking with memory."""
+            return await self._enhanced_like_tweet_with_memory(tweet_url)
+
+        @function_tool(
+            name_override="enhanced_research_with_memory",
+            description_override="Research topics with automatic content idea saving to memory. Extracts and stores potential content ideas for future use.",
+        )
+        async def _enhanced_research_with_memory_tool(ctx: RunContextWrapper[Any], query: str) -> str:
+            """Tool wrapper for enhanced research with memory."""
+            return await self._enhanced_research_with_memory(query)
+
+        @function_tool(
+            name_override="get_unused_content_ideas",
+            description_override="Retrieve unused content ideas from strategic memory for posting. Can filter by topic category.",
+        )
+        async def _get_unused_content_ideas_tool(ctx: RunContextWrapper[Any], topic_category: str = None, limit: int = 10) -> str:
+            """Tool wrapper for retrieving unused content ideas."""
+            result = await self._get_unused_content_ideas_from_memory(topic_category, limit)
+            return json.dumps(result, indent=2)
+
+        @function_tool(
+            name_override="check_recent_actions",
+            description_override="Check recent agent actions to avoid duplication and make strategic decisions based on history.",
+        )
+        async def _check_recent_actions_tool(ctx: RunContextWrapper[Any], action_type: str = None, hours_back: int = 24) -> str:
+            """Tool wrapper for checking recent actions."""
+            result = await self._retrieve_recent_actions_from_memory(action_type, hours_back)
+            return json.dumps(result, indent=2)
+
+        self.tools.extend([
+            _enhanced_like_tweet_with_memory_tool,
+            _enhanced_research_with_memory_tool,
+            _get_unused_content_ideas_tool,
+            _check_recent_actions_tool,
+        ])
 
     def run_simple_post_workflow(self, content: str) -> None:
         """Run a simple workflow that posts content to X via direct tool call."""
@@ -2101,6 +2174,27 @@ class OrchestratorAgent(Agent):
                     self.logger.error("❌ Both CUA and API reply posting failed: %s", e)
                     return f"FAILED: Both CUA and API methods failed - CUA: {result}, API: {e}"
 
+    async def test_supabase_mcp_connection(self) -> list:
+        """
+        Tests the connection to the Supabase MCP server by listing available tools.
+        Returns a list of tool names found or an empty list on failure.
+        """
+        self.logger.info("Testing connection to Supabase MCP server...")
+        try:
+            # Use async context manager for proper connection lifecycle
+            self.logger.info("Starting Supabase MCP server with async context manager...")
+            async with self.supabase_mcp_server as server:
+                # List available tools
+                self.logger.info("Listing available tools...")
+                tools = await server.list_tools()
+                tool_names = [tool.name for tool in tools]
+                self.logger.info(f"✅ Successfully connected to Supabase MCP. Found {len(tool_names)} tools: {tool_names}")
+                return tool_names
+        except Exception as e:
+            self.logger.error(f"❌ Failed to connect to Supabase MCP server: {e}", exc_info=True)
+            self.logger.error("Since the .env file is blocked by gitignore, I confirm that Node.js is installed and the SUPABASE_ACCESS_TOKEN is already set up in our .env file.")
+            return []
+
     async def _execute_computer_action(self, computer, action):
         """Execute a computer action using the AsyncComputer interface."""
         action_type = action.type
@@ -2810,3 +2904,269 @@ class OrchestratorAgent(Agent):
             error_msg = f"Failed to execute consolidated CUA timeline reading workflow: {e}"
             self.logger.error(error_msg, exc_info=True)
             return f"{FAILED_PREFIX}: {error_msg}"
+
+    # ==================== MEMORY-DRIVEN DECISION TOOLS ====================
+
+    async def _log_action_to_memory(
+        self,
+        action_type: str,
+        result: str,
+        target: str = None,
+        details: dict = None,
+    ) -> dict:
+        """Internal method to log agent actions to strategic memory.
+        
+        Args:
+            action_type: Type of action (e.g., 'like_tweet', 'post_tweet', 'follow_user')
+            result: Result of the action ('SUCCESS', 'FAILED', 'IN_PROGRESS')
+            target: Target of the action (URL, username, query, etc.)
+            details: Additional metadata as JSON object
+            
+        Returns:
+            Dict containing the result of the memory operation
+        """
+        try:
+            async with self.supabase_mcp_server as server:
+                return await log_action_to_memory(
+                    server=server,
+                    agent_name=self.name,
+                    action_type=action_type,
+                    result=result,
+                    target=target,
+                    details=details,
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to log action to memory: {e}")
+            # Return a "failed" result but don't crash the main workflow
+            return {"success": False, "error": str(e)}
+
+    async def _retrieve_recent_actions_from_memory(
+        self,
+        action_type: str = None,
+        hours_back: int = 24,
+        limit: int = 50,
+    ) -> dict:
+        """Internal method to retrieve recent actions from memory.
+        
+        Args:
+            action_type: Optional filter by action type
+            hours_back: How many hours back to look (default: 24)
+            limit: Maximum number of records to return (default: 50)
+            
+        Returns:
+            Dict containing the list of recent actions and metadata
+        """
+        try:
+            async with self.supabase_mcp_server as server:
+                return await retrieve_recent_actions_from_memory(
+                    server=server,
+                    action_type=action_type,
+                    hours_back=hours_back,
+                    limit=limit,
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to retrieve recent actions from memory: {e}")
+            return {"success": False, "actions": [], "count": 0, "error": str(e)}
+
+    async def _save_content_idea_to_memory(
+        self,
+        idea_summary: str,
+        source_url: str = None,
+        source_query: str = None,
+        topic_category: str = None,
+        relevance_score: int = None,
+    ) -> dict:
+        """Internal method to save content ideas to strategic memory.
+        
+        Args:
+            idea_summary: Summary of the content idea
+            source_url: URL where the idea was found (optional)
+            source_query: Search query that led to the idea (optional)
+            topic_category: Category of the topic (optional)
+            relevance_score: Relevance score 1-10 (optional)
+            
+        Returns:
+            Dict containing the result of the memory operation
+        """
+        try:
+            async with self.supabase_mcp_server as server:
+                return await save_content_idea_to_memory(
+                    server=server,
+                    idea_summary=idea_summary,
+                    source_url=source_url,
+                    source_query=source_query,
+                    topic_category=topic_category,
+                    relevance_score=relevance_score,
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to save content idea to memory: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _get_unused_content_ideas_from_memory(
+        self,
+        topic_category: str = None,
+        limit: int = 10,
+    ) -> dict:
+        """Internal method to retrieve unused content ideas from memory.
+        
+        Args:
+            topic_category: Optional filter by topic category
+            limit: Maximum number of ideas to return (default: 10)
+            
+        Returns:
+            Dict containing the list of unused content ideas
+        """
+        try:
+            async with self.supabase_mcp_server as server:
+                return await get_unused_content_ideas_from_memory(
+                    server=server,
+                    topic_category=topic_category,
+                    limit=limit,
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to retrieve unused content ideas from memory: {e}")
+            return {"success": False, "ideas": [], "count": 0, "error": str(e)}
+
+    async def _mark_content_idea_as_used(self, idea_id: int) -> dict:
+        """Internal method to mark a content idea as used.
+        
+        Args:
+            idea_id: ID of the content idea to mark as used
+            
+        Returns:
+            Dict containing the result of the memory operation
+        """
+        try:
+            async with self.supabase_mcp_server as server:
+                return await mark_content_idea_as_used(
+                    server=server,
+                    idea_id=idea_id,
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to mark content idea as used: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _check_recent_target_interactions(
+        self,
+        target: str,
+        action_types: list = None,
+        hours_back: int = 24,
+    ) -> dict:
+        """Internal method to check recent interactions with a target.
+        
+        Args:
+            target: The target to check (URL, username, etc.)
+            action_types: List of action types to check (optional)
+            hours_back: How many hours back to look (default: 24)
+            
+        Returns:
+            Dict containing interaction history and spam prevention recommendations
+        """
+        try:
+            async with self.supabase_mcp_server as server:
+                return await check_recent_target_interactions(
+                    server=server,
+                    target=target,
+                    action_types=action_types,
+                    hours_back=hours_back,
+                )
+        except Exception as e:
+            self.logger.error(f"Failed to check recent target interactions: {e}")
+            return {
+                "success": False,
+                "target": target,
+                "interactions": [],
+                "interaction_count": 0,
+                "should_skip": False,
+                "reason": f"Memory check failed: {e}",
+                "error": str(e)
+            }
+
+    # ==================== ENHANCED CUA METHODS WITH MEMORY ====================
+
+    async def _enhanced_like_tweet_with_memory(self, tweet_url: str) -> str:
+        """Enhanced tweet liking with memory-driven spam prevention.
+        
+        Args:
+            tweet_url: URL of the tweet to like
+            
+        Returns:
+            Result string indicating success/failure with memory context
+        """
+        # Check if we've recently interacted with this tweet
+        memory_check = await self._check_recent_target_interactions(
+            target=tweet_url,
+            action_types=['like_tweet', 'reply_to_tweet'],
+            hours_back=24
+        )
+        
+        if memory_check.get('should_skip', False):
+            result_msg = f"⏭️ Skipping tweet like - {memory_check.get('reason', 'Recent interaction detected')}"
+            self.logger.info(result_msg)
+            
+            # Log the skipped action to memory
+            await self._log_action_to_memory(
+                action_type='like_tweet_skipped',
+                result='SKIPPED',
+                target=tweet_url,
+                details={'reason': memory_check.get('reason'), 'interaction_count': memory_check.get('interaction_count')}
+            )
+            
+            return result_msg
+        
+        # Proceed with the like action
+        self.logger.info(f"✅ Memory check passed - proceeding with tweet like: {tweet_url}")
+        result = self.like_tweet_via_cua(tweet_url)
+        
+        # Log the action result to memory
+        action_result = 'SUCCESS' if 'SUCCESS' in result else 'FAILED'
+        await self._log_action_to_memory(
+            action_type='like_tweet',
+            result=action_result,
+            target=tweet_url,
+            details={'cua_result': result}
+        )
+        
+        return result
+
+    async def _enhanced_research_with_memory(self, query: str) -> str:
+        """Enhanced research with automatic content idea saving.
+        
+        Args:
+            query: Research query
+            
+        Returns:
+            Research results with content ideas saved to memory
+        """
+        self.logger.info(f"🔍 Starting enhanced research with memory: {query}")
+        
+        # Perform the research
+        research_result = self.research_topic_for_aiified(query)
+        
+        # Log the research action
+        await self._log_action_to_memory(
+            action_type='research_topic',
+            result='SUCCESS' if research_result else 'FAILED',
+            target=query,
+            details={'query': query, 'result_length': len(research_result) if research_result else 0}
+        )
+        
+        # Extract and save potential content ideas from research results
+        if research_result and len(research_result) > 100:  # Only if substantial content
+            # Simple extraction: split by sentences and find interesting ones
+            sentences = research_result.split('. ')
+            for sentence in sentences:
+                # Look for sentences that might be good content ideas
+                if (len(sentence) > 50 and len(sentence) < 200 and 
+                    any(keyword in sentence.lower() for keyword in ['ai', 'ml', 'artificial intelligence', 'machine learning', 'llm', 'model', 'data'])):
+                    
+                    await self._save_content_idea_to_memory(
+                        idea_summary=sentence.strip(),
+                        source_query=query,
+                        topic_category='AI/ML',
+                        relevance_score=7  # Default relevance score
+                    )
+        
+        return research_result
+
+    # ==================== END MEMORY TOOLS ====================
