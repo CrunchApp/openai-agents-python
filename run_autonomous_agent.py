@@ -49,10 +49,10 @@ def main() -> None:
         scheduling_agent = SchedulingAgent(scheduler=scheduler)
         logger.info("✅ SchedulingAgent created successfully")
         
-        # Schedule the main autonomous loop (1 minute for close monitoring)
-        logger.info("⏰ Scheduling autonomous decision-making cycle (1-minute intervals)...")
-        scheduling_agent.schedule_autonomous_cycle(interval_minutes=1)
-        logger.info("✅ Autonomous cycle scheduled (every 1 minute)")
+        # Schedule the main autonomous loop (5 minute for close monitoring)
+        logger.info("⏰ Scheduling autonomous decision-making cycle (5-minute intervals)...")
+        scheduling_agent.schedule_autonomous_cycle(interval_minutes=5)
+        logger.info("✅ Autonomous cycle scheduled (every 5 minutes)")
         
         # Schedule maintenance tasks to run alongside the main autonomous cycle
         logger.info("📬 Scheduling mention processing (15-minute intervals)...")
@@ -68,12 +68,12 @@ def main() -> None:
         logger.info("🎯 AUTONOMOUS AGENT FULLY OPERATIONAL")
         logger.info("🎯" * 60)
         logger.info("📊 Scheduled Jobs:")
-        logger.info("  • Autonomous Decision Cycle: Every 1 minute")
+        logger.info("  • Autonomous Decision Cycle: Every 5 minutes")
         logger.info("  • Mention Processing: Every 15 minutes")
         logger.info("  • Approved Reply Processing: Every 5 minutes")
         logger.info("")
         logger.info("🤖 The 'AIified' agent is now running autonomously!")
-        logger.info("🔄 Next autonomous decision cycle will begin in 1 minute...")
+        logger.info("🔄 Next autonomous decision cycle will begin in 5 minutes...")
         logger.info("⏸️  Press Ctrl+C to stop the agent")
         logger.info("🎯" * 60)
         

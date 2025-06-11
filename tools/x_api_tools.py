@@ -152,3 +152,54 @@ def get_mentions(since_id: Optional[str] = None) -> dict[str, Any]:
         raise XApiError("Failed to parse mentions response JSON") from e
 
     return data
+
+
+def get_profile_metrics() -> dict[str, Any]:
+    """Fetch public metrics (followers, following, tweet count, listed count) for the authenticated user.
+
+    Returns:
+        Dict containing the user id, username, name, and ``public_metrics`` sub-dict. Example::
+
+            {
+                "id": "123",
+                "username": "AIified",
+                "name": "AIified",
+                "public_metrics": {
+                    "followers_count": 100,
+                    "following_count": 50,
+                    "tweet_count": 200,
+                    "listed_count": 2
+                }
+            }
+
+    Raises:
+        OAuthError: If token retrieval fails.
+        XApiError:  If the API request fails or response JSON parsing fails.
+    """
+    try:
+        access_token = get_valid_x_token(user_x_id="default_user")
+    except OAuthError as e:
+        logger.error("Failed to obtain valid X API token for profile metrics: %s", e)
+        raise
+
+    url = "https://api.twitter.com/2/users/me"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {"user.fields": "username,name,public_metrics"}
+
+    try:
+        resp = requests.get(url, headers=headers, params=params)
+    except Exception as e:
+        logger.error("Error fetching profile metrics: %s", e)
+        raise XApiError("Failed to fetch profile metrics") from e
+
+    if resp.status_code != 200:
+        logger.error("Profile metrics fetch failed: status %s, response %s", resp.status_code, resp.text)
+        raise XApiError(f"Profile metrics fetch failed with status code {resp.status_code}")
+
+    try:
+        data = resp.json()["data"]
+    except Exception as e:
+        logger.error("Failed to parse profile metrics JSON: %s", e)
+        raise XApiError("Failed to parse profile metrics response") from e
+
+    return data

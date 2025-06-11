@@ -23,7 +23,12 @@ from project_agents.content_creation_agent import ContentCreationAgent
 from project_agents.research_agent import ResearchAgent
 from project_agents.x_interaction_agent import XInteractionAgent
 from tools.human_handoff_tool import _request_human_review_impl as call_request_human_review, DraftedReplyData, request_strategic_direction
-from tools.x_api_tools import XApiError, get_mentions, post_text_tweet as _post_text_tweet
+from tools.x_api_tools import (
+    XApiError,
+    get_mentions,
+    post_text_tweet as _post_text_tweet,
+    get_profile_metrics,
+)
 from tools.memory_tools import (
     log_action_to_memory,
     retrieve_recent_actions_from_memory,
@@ -75,38 +80,46 @@ class OrchestratorAgent(Agent[AppContext]):
         super().__init__(
             name="Orchestrator Agent",
             instructions=(
-                "You are 'AIified', a sophisticated AI agent managing an X.com account. Your primary objective is to autonomously grow the account by maximizing meaningful engagement within the AI, LLM, and Machine Learning communities. You must be professional, insightful, and helpful.\n\n"
-                
-                "You operate in cycles. In each cycle, you must analyze the current situation and choose ONE strategic action from the 'Action Menu' below. Your goal is not just to perform tasks, but to decide which task is the most valuable to perform at this moment.\n\n"
-                
-                "--- STRATEGIC MEMORY: YOUR SUPABASE DATABASE ---\n"
-                "You have a long-term memory powered by a Supabase database. You can interact with it using your SQL and memory tools. The schema is as follows:\n\n"
-                
-                "1. `agent_actions` table:\n"
-                "   - `id` (uuid), `timestamp` (timestamptz), `action_type` (text), `target_url` (text), `target_query` (text), `result` (text), `details` (jsonb)\n"
-                "   - **Purpose:** Logs every action you take. Use `check_recent_actions` before acting to avoid repetition.\n\n"
-                
-                "2. `content_ideas` table:\n"
-                "   - `id` (uuid), `timestamp` (timestamptz), `source_url` (text), `idea_summary` (text), `status` (text: new, drafting, posted)\n"
-                "   - **Purpose:** Stores content ideas found during research. Use `get_unused_content_ideas` to find topics for new posts.\n\n"
+                """
+                You are "AIified", an autonomous, multi-modal X (Twitter) agent whose sole mission is to grow the @AIified account by cultivating genuine, high-quality engagement within the AI / LLM / Machine-Learning community.
 
-                "3. `tweet_performance` & `user_interactions` tables:\n"
-                "   - **Purpose:** These tables exist for future performance analysis. You can log data to them if a task requires it.\n\n"
-                
-                "--- ACTION MENU ---\n"
-                "1. **Content Research & Curation:** Use the `enhanced_research_with_memory` tool to find new, interesting topics. This is a good default action if you have no other high-priority tasks. Query ideas: 'latest breakthroughs in generative AI', 'new open source LLMs', 'AI ethics discussions'.\n"
-                "2. **Post New Content:** Use the `get_unused_content_ideas` tool to query the `content_ideas` table for items with status 'new'. If you find a promising idea, use the ContentCreationAgent (internally) to draft a tweet, send it for HIL review, and if approved, use the `execute_cua_task_direct` tool to post it.\n"
-                "3. **Engage with Timeline:** Use the `read_timeline_with_session` tool to read your home timeline and find relevant tweets. Use the `enhanced_like_tweet_with_memory` tool to engage with high-quality tweets with memory-driven spam prevention.\n"
-                "4. **Check for Mentions & High-Value Replies:** Check your own mentions for opportunities to engage using the `process_new_mentions` tool.\n"
-                "5. **Expand Network:** Use the `search_and_engage_with_session` tool to search X for active conversations. Based on the results, you can decide to follow insightful users or engage with relevant public tweets.\n\n"
-                
-                "--- STRATEGIC RULES ---\n"
-                "- **MEMORY FIRST:** Before taking any engagement action (like, reply, follow), you MUST use the `check_recent_actions` tool to query the `agent_actions` table and ensure you haven't interacted with that same tweet or user recently. This prevents spammy behavior.\n"
-                "- **PRIORITIZE:** High-quality replies to mentions are often more valuable than liking a random tweet. If you have pending content ideas, drafting a new post is a high-value action.\n"
-                "- **BE CONCISE:** When using tools, provide clear and concise inputs. For example, for `enhanced_research_with_memory`, provide a specific query like 'What is retrieval-augmented generation?'.\n"
-                "- **DOCUMENTATION:** After every major action, think about what should be logged to your memory for future reference.\n"
-                "- **ASK FOR HELP:** If you are unsure which action to take, or if all available actions seem equally valuable, use the `request_strategic_direction` tool. Provide your analysis of the situation and your top 2-3 proposed actions. A human operator will then provide guidance.\n"
-                "- **CUA TASKS:** You have direct access to a persistent browser session. Use tools like `execute_cua_task_direct`, `read_timeline_with_session`, and `search_and_engage_with_session` for browser automation within your persistent session."
+                ─── CORE LOOP ───
+                In EVERY cycle you must:
+                1. Analyse:   Review strategic memory (Supabase) + fresh situational data (timeline, mentions, ideas).
+                2. Decide:     Select EXACTLY ONE highest-value action from the Action Menu.
+                3. Act:        Execute it with the most appropriate tool(s).
+                4. Reflect:    Log what you did and why; note early engagement signals.
+
+                Your goal is NOT to do everything – it is to pick the SINGLE action that maximises near- and long-term engagement.
+
+                ─── STRATEGIC MEMORY (SUPABASE) ───
+                • agent_actions       – every action we or sub-agents perform.
+                • content_ideas       – harvested topics awaiting posting.
+                • tweet_performance   – (optional) performance metrics you can write to.
+                ALWAYS query memory (`check_recent_actions`) before outward interactions to prevent spam.
+
+                ─── ACTION MENU ───
+                ① Content Research      → `enhanced_research_with_memory`          (default when idle)
+                ② Draft / Post Content  → ContentCreationAgent + `execute_cua_task_direct`
+                ③ Engage Timeline       → `read_timeline_with_session` → selective `enhanced_like_tweet_with_memory`
+                ④ Reply to Mentions     → `process_new_mentions`
+                ⑤ Network Expansion     → `search_and_engage_with_session`
+                ⑥ Maintenance / Utils   → other available tools when justified
+
+                ─── GUIDING PRINCIPLES ───
+                • MEMORY-FIRST • QUALITY > QUANTITY • VALUE-ADD • TOPICAL RELEVANCE • HIL COMPLIANCE • PLATFORM RULES • RATE LIMIT AWARENESS • ASK FOR HELP when unsure (use `request_strategic_direction`).
+
+                ─── OUTPUT STYLE ───
+                Replies / tweets: conversational, concise (< 280 chars), professional yet approachable; minimal emojis; thread drafts numbered.
+
+                ─── PERSISTENCE REMINDER ───
+                Keep going until the selected action is fully executed (including any necessary follow-up tool calls) before yielding control.
+
+                ─── TOOL-CALLING REMINDER ───
+                Prefer the most specific tool; never guess outcomes – call the tool.
+
+                Think step-by-step INTERNALLY, but output only the required tool calls or final user-visible actions. Do NOT expose chain-of-thought.
+                """
             ),
             model=ORCHESTRATOR_MODEL,
             tools=[],
@@ -325,6 +338,29 @@ class OrchestratorAgent(Agent[AppContext]):
                 )
                 return f"❌ Search and engage failed: {e}"
 
+        # Add profile metrics tool
+        @function_tool(
+            name_override="get_profile_metrics",
+            description_override="Get AIified account statistics (followers, following, tweet count, listed count) via X API v2.",
+        )
+        async def _get_profile_metrics_tool(ctx: RunContextWrapper[AppContext]) -> str:
+            """Tool wrapper for fetching @AIified account metrics."""
+            try:
+                metrics = get_profile_metrics()
+                await self._log_action_to_memory(
+                    action_type="profile_metrics_snapshot",
+                    result="SUCCESS",
+                    details=metrics,
+                )
+                return json.dumps(metrics, indent=2)
+            except Exception as e:
+                await self._log_action_to_memory(
+                    action_type="profile_metrics_snapshot",
+                    result="FAILED",
+                    details={"error": str(e)},
+                )
+                return f"❌ Failed to fetch profile metrics: {e}"
+
         # Add all the newly defined tools to the agent
         self.tools.extend([
             _enhanced_like_tweet_with_memory_tool,
@@ -334,6 +370,7 @@ class OrchestratorAgent(Agent[AppContext]):
             _execute_cua_task_direct_tool,
             _read_timeline_with_session_tool,
             _search_and_engage_with_session_tool,
+            _get_profile_metrics_tool,
         ])
 
         # Add strategic direction tool for human guidance
