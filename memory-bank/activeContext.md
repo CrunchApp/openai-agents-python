@@ -592,12 +592,40 @@ The completion of Sprint 5 marks the realization of our core strategic vision:
 *   **✅ Memory-Driven Intelligence**: All decisions informed by comprehensive historical context
 *   **✅ Production Scalability**: Robust architecture ready for live deployment
 
+## Current Development Context: Phase 4 - Strategic Autonomy Consolidation
+
+### ✅ Task 2.1: Consolidate Control and Simplify Scheduling - COMPLETED
+
+**Achievement**: Successfully eliminated conflicting schedulers that were causing API rate limit errors and competing for resources.
+
+#### **Scheduling Architecture Consolidation**
+*   **✅ Removed Separate Mention Processing**: Eliminated `schedule_mention_processing()` from SchedulingAgent
+*   **✅ Removed Separate Reply Processing**: Eliminated `schedule_approved_reply_processing()` from SchedulingAgent  
+*   **✅ Consolidated Entry Point**: Updated `run_autonomous_agent.py` to schedule only the autonomous cycle
+*   **✅ Single Decision Maker**: OrchestratorAgent now has sole authority over when to check mentions or process replies
+*   **✅ Rate Limit Resolution**: Eliminated conflicting API calls that were causing 429 errors
+
+#### **Technical Implementation**
+**Modified Files:**
+*   **`run_autonomous_agent.py`**: Removed calls to mention and reply processing schedulers
+*   **`project_agents/scheduling_agent.py`**: Deleted `schedule_mention_processing()` and `schedule_approved_reply_processing()` methods, and related job functions
+
+**Operational Benefits:**
+*   **API Rate Limit Prevention**: No more conflicting processes hitting X API simultaneously
+*   **Strategic Centralization**: OrchestratorAgent makes all timing decisions based on strategic assessment
+*   **Simplified Architecture**: Clean, single-threaded autonomous operation
+*   **Enhanced Reliability**: Eliminates resource contention and scheduling conflicts
+
+#### **Next Strategic Phase**
+The OrchestratorAgent now operates as the sole strategic decision-maker, setting the foundation for enhanced autonomous intelligence where timing, priorities, and actions are all driven by strategic assessment rather than rigid scheduling.
+
 ## Operational Status
 
 *   **Core Infrastructure**: **✅ OPERATIONAL** - All foundational systems stable
-*   **Autonomous Architecture**: **✅ OPERATIONAL** - Full autonomous decision-making proven
+*   **Autonomous Architecture**: **✅ OPERATIONAL** - Full autonomous decision-making proven  
+*   **Consolidated Scheduling**: **✅ OPERATIONAL** - Single strategic control point implemented
 *   **Stateful CUA Sessions**: **✅ OPERATIONAL** - Persistent browser automation implemented
 *   **Memory Integration**: **✅ OPERATIONAL** - Strategic memory driving all decisions
-*   **Production Readiness**: **✅ ACHIEVED** - Ready for live autonomous operation
+*   **Production Readiness**: **✅ ACHIEVED** - Ready for optimized autonomous operation
 
-*Current as of January 2025 - Sprint 5 Complete: Stateful CUA Session Architecture Achieved* 
+*Current as of January 2025 - Task 2.1 Complete: Scheduling Consolidation Achieved* 
