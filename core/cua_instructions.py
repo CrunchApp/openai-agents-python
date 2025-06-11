@@ -856,7 +856,7 @@ def create_smart_cua_task_prompt(task_description: str, context: dict = None) ->
     ]) and any(phrase in task_lower for phrase in ["like", "heart", "engage"]):
         
         # Extract search query from the description
-        search_query = "#AI"  # Default fallback
+        search_query = "OpenAI"  # Default fallback
         
         # Try to extract specific hashtags or search terms
         import re
