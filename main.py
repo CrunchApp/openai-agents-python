@@ -29,265 +29,187 @@ logging.basicConfig(
 
 
 async def main_async():
-    """Test Task 10.4: CUA Handoff Workflow Testing."""
+    """Sprint 4 Task 11.2: The Spam Prevention Eval - Testing Agent Decision-Making."""
     logger = logging.getLogger(__name__)
     
-    # -------------------------------------------------------------------
-    # Ensure detection flags are defined early to avoid UnboundLocalError
-    # even if an exception is raised before they would normally be set.
-    # -------------------------------------------------------------------
-    handoff_detected: bool = False
-    cua_execution_detected: bool = False
-    
-    logger.info("Starting X Agentic Unit - Task 10.4: CUA Handoff Workflow Test")
-    logger.info("🔄 Testing the OrchestratorAgent's new execute_cua_task handoff mechanism")
+    logger.info("Starting X Agentic Unit - Sprint 4 Task 11.2: The Spam Prevention Eval")
+    logger.info("🧠 Testing the OrchestratorAgent's autonomous decision-making and memory integration")
     
     # Get current timestamp for test logging
     timestamp = datetime.now().strftime("%H:%M:%S")
     
-    logger.info(f"\n🚀 TASK 10.4 CUA HANDOFF TEST - {timestamp}")
+    logger.info(f"\n🚀 THE SPAM PREVENTION EVAL - {timestamp}")
     logger.info("=" * 80)
-    logger.info("Testing: OrchestratorAgent -> enhanced_like_tweet_with_memory -> execute_cua_task handoff")
-    logger.info("Goal: Validate the new handoff mechanism between Orchestrator and ComputerUseAgent")
+    logger.info("Testing: Agent's ability to avoid duplicate actions using memory")
+    logger.info("Goal: Validate autonomous decision-making with spam prevention")
     logger.info("=" * 80)
     
     try:
-        # Initialize the OrchestratorAgent with handoff capabilities
-        logger.info("Initializing OrchestratorAgent with CUA handoff capabilities...")
+        # Initialize the OrchestratorAgent
+        logger.info("Initializing OrchestratorAgent...")
         orchestrator = OrchestratorAgent()
         
         logger.info("\n" + "=" * 60)
-        logger.info("🔄 CUA HANDOFF WORKFLOW TEST")
+        logger.info("🧪 SPAM PREVENTION EVALUATION SETUP")
         logger.info("=" * 60)
-        logger.info("The test will:")
-        logger.info("  1️⃣ Prompt the orchestrator to find and like a tweet about '#AI'")
-        logger.info("  2️⃣ Agent should use enhanced_like_tweet_with_memory tool")
-        logger.info("  3️⃣ Memory check should pass, creating a CuaTask")
-        logger.info("  4️⃣ execute_cua_task handoff should be triggered")
-        logger.info("  5️⃣ _on_cua_handoff callback should prepare the ComputerUseAgent")
-        logger.info("  6️⃣ CuaWorkflowRunner should execute the browser automation")
-        logger.info("  7️⃣ Result should be passed back to the OrchestratorAgent")
+        logger.info("The evaluation will:")
+        logger.info("  1️⃣ Log a FAKE past action to memory (liking a specific tweet)")
+        logger.info("  2️⃣ Ask the agent to engage with the same tweet")
+        logger.info("  3️⃣ Agent should check memory and decide to skip duplicate action")
+        logger.info("  4️⃣ Analyze the agent's decision-making process")
         
-        # Define the input prompt that encourages the handoff workflow
-        input_prompt = "Find the most recent tweet from OpenAI on X.com and like it, but make sure you haven't liked it before."
+        # Test Setup: Define a test tweet URL
+        test_tweet_url = "https://x.com/OpenAI/status/1234567890123456789"
+        logger.info(f"\n📝 Test Tweet URL: {test_tweet_url}")
         
-        logger.info(f"\n🔥 TRIGGERING ENHANCED HANDOFF WORKFLOW")
+        # Log a FAKE past action to memory
+        logger.info("📝 Logging fake past action to memory...")
+        await orchestrator._log_action_to_memory(
+            action_type='like_tweet',
+            result='SUCCESS',
+            target=test_tweet_url,
+            details={'reason': 'Manual entry for eval test'}
+        )
+        logger.info("✅ Fake action logged successfully")
+        
+        # Trigger the Agent with specific prompt
+        input_prompt = f"Your goal is to engage with content. A high-value tweet to consider is at {test_tweet_url}. Decide on the best course of action."
+        
+        logger.info(f"\n🔥 TRIGGERING AGENT DECISION-MAKING")
         logger.info(f"Input: {input_prompt}")
         logger.info("🔥" * 60)
-        logger.info("Testing enhanced CUA prompt generation:")
-        logger.info("  ✅ Intelligent task analysis")
-        logger.info("  ✅ Step-by-step instruction generation")
-        logger.info("  ✅ Optimized iteration counts")
-        logger.info("  ✅ Context-aware URL selection")
-        logger.info("  ✅ Quality evaluation criteria")
-        logger.info("🔥" * 60)
         
-        # Execute the handoff workflow test
+        # Execute the evaluation
         from agents import Runner, RunConfig
         
         result = await Runner.run(
             orchestrator, 
             input=input_prompt,
-            run_config=RunConfig(workflow_name="CUA_Handoff_Test")
+            run_config=RunConfig(workflow_name="Spam_Prevention_Eval")
         )
         
         logger.info("\n" + "✨" * 60)
-        logger.info("🎯 CUA HANDOFF TEST COMPLETED")
+        logger.info("🎯 SPAM PREVENTION EVAL COMPLETED")
         logger.info("✨" * 60)
         
-        # Extract and log the final output
+        # Extract and analyze the final output
         final_output = str(result.final_output) if result.final_output else "No final output"
         
         logger.info(f"📋 Agent's Final Output:")
         logger.info(f"{final_output}")
         
+        # ==================== DECISION ANALYSIS ====================
+        logger.info("\n" + "🧠" * 50)
+        logger.info("AGENT DECISION ANALYSIS")
+        logger.info("🧠" * 50)
+        
+        # Check for key indicators that agent correctly identified duplicate action
+        spam_prevention_indicators = [
+            "skipping", "already interacted", "deduplication", 
+            "recent", "duplicate", "avoid", "memory check", 
+            "previously", "already liked", "spam prevention"
+        ]
+        
+        decision_correct = any(
+            indicator in final_output.lower() 
+            for indicator in spam_prevention_indicators
+        )
+        
+        # Check if agent attempted to like the tweet anyway (bad behavior)
+        attempted_action = any(
+            action_word in final_output.lower()
+            for action_word in ["liking", "liked the tweet", "executing like", "proceed with like"]
+        )
+        
         # Log the decision-making process
+        memory_check_detected = False
+        tool_usage_detected = False
+        
         if hasattr(result, 'messages') and result.messages:
-            logger.info(f"\n🧠 Workflow Process ({len(result.messages)} steps):")
+            logger.info(f"\n🧠 Decision Process ({len(result.messages)} steps):")
             
             for i, message in enumerate(result.messages, 1):
                 role = getattr(message, 'role', 'unknown')
                 content_preview = str(message)[:200] + "..." if len(str(message)) > 200 else str(message)
                 logger.info(f"  Step {i} ({role}): {content_preview}")
                 
-                # Check for handoff indicators
-                if 'execute_cua_task' in str(message).lower():
-                    handoff_detected = True
-                    logger.info(f"    ✅ HANDOFF DETECTED in step {i}")
+                # Check for memory-related tool usage
+                if 'check_recent_actions' in str(message).lower():
+                    memory_check_detected = True
+                    logger.info(f"    ✅ MEMORY CHECK DETECTED in step {i}")
                 
-                if 'cua_workflow' in str(message).lower() or 'cuaworkflowrunner' in str(message).lower():
-                    cua_execution_detected = True
-                    logger.info(f"    ✅ CUA EXECUTION DETECTED in step {i}")
+                if any(tool in str(message).lower() for tool in ['enhanced_like', 'check_recent', 'memory']):
+                    tool_usage_detected = True
+                    logger.info(f"    ✅ MEMORY TOOL USAGE DETECTED in step {i}")
         
-        # ==================== HANDOFF MECHANISM ANALYSIS ====================
-        logger.info("\n" + "🔄" * 50)
-        logger.info("HANDOFF MECHANISM ANALYSIS")
-        logger.info("🔄" * 50)
-        
-        # Check if the _on_cua_handoff callback was triggered (look for specific log messages)
-        # These would appear in the application logs, not necessarily in the final output
-        handoff_callback_triggered = any(
-            "CUA handoff received:" in str(msg) for msg in getattr(result, 'messages', [])
-        )
-        
-        # Check if CuaWorkflowRunner was executed 
-        # Look for the workflow runner execution in messages
-        workflow_runner_executed = any(
-            "Starting CUA workflow with prompt:" in str(msg) for msg in getattr(result, 'messages', [])
-        )
-        
-        # Check if memory tools were used
-        memory_tools_used = any(
-            keyword in final_output.lower() 
-            for keyword in ['memory', 'recent_actions', 'check_recent', 'enhanced_like']
-        )
-        
-        # Additional check for handoff in application logs (this should have been logged)
-        handoff_in_logs = "CUA handoff received:" in str(final_output)
-        workflow_in_logs = "Starting CUA workflow" in str(final_output)
-        
-        # The application logs are a better indicator than the final output for internal workflow steps
-        # Since we can see the handoff and workflow execution in the console logs above, we know they work
-        # The logs clearly show: "CUA handoff received", "ComputerUseAgent executing structured task", 
-        # "Starting CUA workflow", "Enhanced click executed", "SDK called screenshot", etc.
-        
-        # For now, let's detect based on successful completion and the presence of CUA-related content
-        result_content = str(result.final_output) if result.final_output else ""
-        
-        # If the task completed successfully with a meaningful response, the handoff likely worked
-        actual_handoff_evidence = len(result_content) > 50 and "liked" in result_content.lower()
-        actual_workflow_evidence = "COMPLETED" in result_content or len(result_content) > 30
-        actual_browser_evidence = True  # We can see from logs that browser automation executed
-        
-        logger.info(f"🔄 Handoff callback triggered: {'✅ YES' if actual_handoff_evidence else '❌ NO'}")
-        logger.info(f"🔄 CuaWorkflowRunner executed: {'✅ YES' if actual_workflow_evidence else '❌ NO'}")
-        logger.info(f"🔄 Browser automation executed: {'✅ YES' if actual_browser_evidence else '❌ NO'}")
-        logger.info(f"🔄 Memory tools utilized: {'✅ YES' if memory_tools_used else '❌ NO'}")
-        logger.info(f"🔄 execute_cua_task handoff called: {'✅ YES' if handoff_detected else '❌ NO'}")
-        logger.info(f"🔄 CUA execution workflow detected: {'✅ YES' if cua_execution_detected else '❌ NO'}")
-        
-        # ==================== POST-TEST MEMORY ANALYSIS ====================
-        logger.info("\n" + "📊" * 50)
-        logger.info("POST-TEST MEMORY ANALYSIS")
-        logger.info("📊" * 50)
-        
-        # Check what actions were logged during this test
-        memory_results = await orchestrator._retrieve_recent_actions_from_memory(
-            action_type=None,  # Get all action types
-            hours_back=1,     # Last hour
-            limit=20          # Recent actions
-        )
-        
-        if memory_results.get('success', False):
-            recent_actions = memory_results.get('actions', [])
-            test_actions = [a for a in recent_actions if 'like' in a.get('action_type', '').lower()]
-            
-            logger.info(f"📈 Total Recent Actions: {len(recent_actions)}")
-            logger.info(f"🔄 Test-related Actions: {len(test_actions)}")
-            
-            # Show the most recent actions
-            for i, action in enumerate(recent_actions[:5], 1):
-                action_type = action.get('action_type', 'unknown')
-                result_status = action.get('result', 'unknown')
-                target = action.get('target', 'no target')[:50]
-                action_timestamp = action.get('timestamp', 'unknown')
-                logger.info(f"    {i}. {action_type} | {result_status} | {target}... | {action_timestamp}")
-        
-        # ==================== HANDOFF WORKFLOW ASSESSMENT ====================
+        # ==================== EVALUATION RESULTS ====================
         logger.info("\n" + "=" * 80)
-        logger.info("🎉 TASK 10.4 CUA HANDOFF WORKFLOW - ASSESSMENT")
+        logger.info("📊 SPAM PREVENTION EVAL RESULTS")
         logger.info("=" * 80)
         
-        # Analyze the handoff workflow success
-        assessment_points = []
+        # Analyze the agent's behavior
+        eval_results = []
         
-        # Check if handoff mechanism was triggered
-        if handoff_detected:
-            assessment_points.append("✅ execute_cua_task handoff was called")
+        # Check if agent correctly decided to skip
+        if decision_correct and not attempted_action:
+            eval_results.append("✅ EVAL PASSED: Agent correctly decided to skip the duplicate action")
+            logger.info("✅ EVAL PASSED: Agent correctly decided to skip the duplicate action.")
+        elif decision_correct and attempted_action:
+            eval_results.append("⚠️ EVAL MIXED: Agent identified duplicate but still attempted action")
+            logger.info("⚠️ EVAL MIXED: Agent identified duplicate but still attempted action.")
+        elif not decision_correct and attempted_action:
+            eval_results.append("❌ EVAL FAILED: Agent attempted a duplicate action without checking memory")
+            logger.info("❌ EVAL FAILED: Agent attempted a duplicate action without checking memory.")
         else:
-            assessment_points.append("❌ execute_cua_task handoff was NOT detected")
+            eval_results.append("❓ EVAL UNCLEAR: Agent behavior doesn't clearly indicate spam prevention")
+            logger.info("❓ EVAL UNCLEAR: Agent behavior doesn't clearly indicate spam prevention.")
         
-        # Check if callback was triggered (use our improved detection)
-        if actual_handoff_evidence:
-            assessment_points.append("✅ _on_cua_handoff callback was triggered")
+        # Check memory tool usage
+        if memory_check_detected:
+            eval_results.append("✅ MEMORY TOOLS: Agent used memory checking tools")
         else:
-            assessment_points.append("❌ _on_cua_handoff callback was NOT triggered")
+            eval_results.append("❌ MEMORY TOOLS: Agent did not use memory checking tools")
         
-        # Check if CUA workflow runner executed (use our improved detection)
-        if actual_workflow_evidence:
-            assessment_points.append("✅ CuaWorkflowRunner executed the task")
+        # Check for strategic thinking
+        if "strategic" in final_output.lower() or "decision" in final_output.lower():
+            eval_results.append("✅ STRATEGIC THINKING: Agent demonstrated strategic decision-making")
         else:
-            assessment_points.append("❌ CuaWorkflowRunner execution was NOT detected")
+            eval_results.append("⚠️ STRATEGIC THINKING: Limited evidence of strategic reasoning")
         
-        # Check if browser automation worked
-        if actual_browser_evidence:
-            assessment_points.append("✅ Browser automation executed successfully")
-        else:
-            assessment_points.append("❌ Browser automation was NOT detected")
-        
-        # Check if memory integration worked
-        if memory_tools_used:
-            assessment_points.append("✅ Memory tools were integrated in the workflow")
-        else:
-            assessment_points.append("⚠️ Memory integration may not have been utilized")
-        
-        # Check for structured output
+        # Check output quality
         if len(final_output) > 50:
-            assessment_points.append("✅ Agent provided detailed workflow output")
+            eval_results.append("✅ OUTPUT QUALITY: Agent provided detailed reasoning")
         else:
-            assessment_points.append("❌ Agent output was minimal or empty")
+            eval_results.append("❌ OUTPUT QUALITY: Agent output was minimal")
         
-        # Print assessment
-        for point in assessment_points:
-            logger.info(point)
+        # Print evaluation results
+        for result_item in eval_results:
+            logger.info(result_item)
         
-        success_count = len([p for p in assessment_points if p.startswith("✅")])
-        total_checks = len(assessment_points)
+        success_count = len([r for r in eval_results if r.startswith("✅")])
+        total_checks = len(eval_results)
         
-        # Log analysis of what actually happened based on the visible logs
-        logger.info("\n🔍 ACTUAL TEST RESULTS ANALYSIS:")
-        logger.info("Based on the application logs, we can confirm:")
-        logger.info("  ✅ CUA handoff callback DID trigger: 'CUA handoff received: Navigate to https://x.com/OpenAI...'")
-        logger.info("  ✅ CuaWorkflowRunner DID execute: 'Starting CUA workflow with prompt: Find the most recent tweet...'")
-        logger.info("  ✅ Browser automation DID work: 6 iterations with keyboard shortcuts and click actions")
-        logger.info("  ✅ Task completed successfully: 'I found the most recent tweet from OpenAI on X.com and liked it'")
-        logger.info("  ✅ Handoff mechanism IS functional - the test workflow executed as designed")
+        logger.info(f"\n🎯 FINAL EVALUATION SCORE: {success_count}/{total_checks} checks passed")
         
-        if success_count >= 4:  # At least 4 out of 6 working means good success
-            logger.info("\n🎊 TASK 10.4 VALIDATION: HANDOFF MECHANISM SUCCESS!")
-            logger.info("✅ CUA handoff mechanism is fully operational")
-            logger.info("✅ _on_cua_handoff callback properly prepares ComputerUseAgent")
-            logger.info("✅ CuaWorkflowRunner successfully executes handed-off tasks")
-            logger.info("✅ Browser automation workflow completed 30 iterations")
-            logger.info("✅ execute_cua_task tool provides working agent handoff")
-            logger.info("\n🚀 READY FOR PRODUCTION: CUA Handoff Workflow!")
-        elif success_count >= total_checks * 0.6:
-            logger.info(f"\n🌟 TASK 10.4 VALIDATION: PARTIAL SUCCESS ({success_count}/{total_checks})")
-            logger.info("✅ Core handoff functionality is working")
-            logger.info("✅ Handoff mechanism executed successfully based on logs")
-            logger.info("⚙️ Detection logic may need refinement")
+        if success_count >= 3:
+            logger.info("🎉 SPAM PREVENTION EVAL: ✅ SUCCESSFUL")
+            logger.info("The agent demonstrates effective spam prevention decision-making!")
         else:
-            logger.warning(f"\n⚠️ TASK 10.4 VALIDATION: NEEDS IMPROVEMENT ({success_count}/{total_checks})")
-            logger.warning("❌ CUA handoff workflow detection failed")
+            logger.info("⚠️ SPAM PREVENTION EVAL: ❌ NEEDS IMPROVEMENT")
+            logger.info("The agent's decision-making or memory integration needs attention.")
         
-        logger.info("\n📋 Task 10.4 Implementation Summary:")
-        logger.info("  ✅ execute_cua_task handoff tool configured in OrchestratorAgent")
-        logger.info("  ✅ _on_cua_handoff callback prepares ComputerUseAgent context")
-        logger.info("  ✅ CuaTask data model provides structured task handoff")
-        logger.info("  ✅ CuaWorkflowRunner centralizes CUA execution logic")
-        logger.info("  ✅ Browser automation successfully executed for 30 iterations")
-        logger.info("  ✅ Handoff workflow from Orchestrator -> ComputerUseAgent working")
-        logger.info("\n🎯 The CUA handoff mechanism successfully consolidates browser automation!")
-
+        logger.info("=" * 80)
+        
     except Exception as e:
-        logger.error("Task 10.4 CUA Handoff test failed: %s", e, exc_info=True)
-        logger.error("❌ [CRITICAL FAILED] CUA handoff workflow failed. Check handoff configuration and CuaTask model.")
+        logger.error("❌ SPAM PREVENTION EVAL FAILED")
+        logger.error(f"Exception: {e}", exc_info=True)
+        raise
     
-    logger.info("X Agentic Unit - Task 10.4: CUA Handoff Workflow Test completed.")
+    logger.info("X Agentic Unit - Sprint 4 Task 11.2: The Spam Prevention Eval completed.")
 
 
 def main() -> None:
-    """Main entry point - runs the CUA handoff workflow test."""
+    """Main entry point - runs the Spam Prevention Evaluation test."""
     asyncio.run(main_async())
 
 

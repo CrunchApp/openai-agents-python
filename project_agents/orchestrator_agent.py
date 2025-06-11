@@ -9,6 +9,7 @@ from agents import Agent, RunContextWrapper, function_tool, Runner, handoff
 from agents.mcp.server import MCPServerStdio
 from core.config import settings
 from core.models import CuaTask
+from core.constants import ORCHESTRATOR_MODEL
 from core.cua_instructions import get_tweet_like_prompt
 from core.db_manager import (
     get_agent_state,
@@ -21,7 +22,7 @@ from project_agents.content_creation_agent import ContentCreationAgent
 from project_agents.research_agent import ResearchAgent
 from project_agents.x_interaction_agent import XInteractionAgent
 from project_agents.computer_use_agent import ComputerUseAgent
-from tools.human_handoff_tool import _request_human_review_impl as call_request_human_review, DraftedReplyData
+from tools.human_handoff_tool import _request_human_review_impl as call_request_human_review, DraftedReplyData, request_strategic_direction
 from tools.x_api_tools import XApiError, get_mentions, post_text_tweet as _post_text_tweet
 from tools.memory_tools import (
     log_action_to_memory,
@@ -80,21 +81,36 @@ class OrchestratorAgent(Agent):
                 
                 "You operate in cycles. In each cycle, you must analyze the current situation and choose ONE strategic action from the 'Action Menu' below. Your goal is not just to perform tasks, but to decide which task is the most valuable to perform at this moment.\n\n"
                 
+                "--- STRATEGIC MEMORY: YOUR SUPABASE DATABASE ---\n"
+                "You have a long-term memory powered by a Supabase database. You can interact with it using your SQL and memory tools. The schema is as follows:\n\n"
+                
+                "1. `agent_actions` table:\n"
+                "   - `id` (uuid), `timestamp` (timestamptz), `action_type` (text), `target_url` (text), `target_query` (text), `result` (text), `details` (jsonb)\n"
+                "   - **Purpose:** Logs every action you take. Use `check_recent_actions` before acting to avoid repetition.\n\n"
+                
+                "2. `content_ideas` table:\n"
+                "   - `id` (uuid), `timestamp` (timestamptz), `source_url` (text), `idea_summary` (text), `status` (text: new, drafting, posted)\n"
+                "   - **Purpose:** Stores content ideas found during research. Use `get_unused_content_ideas` to find topics for new posts.\n\n"
+
+                "3. `tweet_performance` & `user_interactions` tables:\n"
+                "   - **Purpose:** These tables exist for future performance analysis. You can log data to them if a task requires it.\n\n"
+                
                 "--- ACTION MENU ---\n"
                 "1. **Content Research & Curation:** Use the `enhanced_research_with_memory` tool to find new, interesting topics. This is a good default action if you have no other high-priority tasks. Query ideas: 'latest breakthroughs in generative AI', 'new open source LLMs', 'AI ethics discussions'.\n"
-                "2. **Post New Content:** Use the `get_unused_content_ideas` tool to see if you have a backlog of good ideas. If you find a promising idea, use the ContentCreationAgent (internally) to draft a tweet, send it for HIL review, and if approved, use the `execute_cua_task` tool to post it.\n"
+                "2. **Post New Content:** Use the `get_unused_content_ideas` tool to query the `content_ideas` table for items with status 'new'. If you find a promising idea, use the ContentCreationAgent (internally) to draft a tweet, send it for HIL review, and if approved, use the `execute_cua_task` tool to post it.\n"
                 "3. **Engage with Timeline:** Use the `execute_cua_task` tool to read your home timeline and find relevant tweets. Use the `enhanced_like_tweet_with_memory` tool to engage with high-quality tweets with memory-driven spam prevention.\n"
                 "4. **Check for Mentions & High-Value Replies:** Check your own mentions for opportunities to engage using the `process_new_mentions` tool.\n"
                 "5. **Expand Network:** Use the `execute_cua_task` tool to search X for active conversations. Based on the results, you can decide to follow insightful users or engage with relevant public tweets.\n\n"
                 
                 "--- STRATEGIC RULES ---\n"
-                "- **MEMORY FIRST:** Before taking any engagement action (like, reply, follow), you MUST use the `check_recent_actions` tool to ensure you haven't interacted with that same tweet or user recently. This prevents spammy behavior.\n"
+                "- **MEMORY FIRST:** Before taking any engagement action (like, reply, follow), you MUST use the `check_recent_actions` tool to query the `agent_actions` table and ensure you haven't interacted with that same tweet or user recently. This prevents spammy behavior.\n"
                 "- **PRIORITIZE:** High-quality replies to mentions are often more valuable than liking a random tweet. If you have pending content ideas, drafting a new post is a high-value action.\n"
                 "- **BE CONCISE:** When using tools, provide clear and concise inputs. For example, for `enhanced_research_with_memory`, provide a specific query like 'What is retrieval-augmented generation?'.\n"
                 "- **DOCUMENTATION:** After every major action, think about what should be logged to your memory for future reference.\n"
+                "- **ASK FOR HELP:** If you are unsure which action to take, or if all available actions seem equally valuable, use the `request_strategic_direction` tool. Provide your analysis of the situation and your top 2-3 proposed actions. A human operator will then provide guidance.\n"
                 "- **CUA TASKS:** For browser automation tasks, use the `execute_cua_task` tool with appropriate CuaTask parameters including prompt, start_url (optional), and max_iterations."
             ),
-            model="o4-mini",
+            model=ORCHESTRATOR_MODEL,
             tools=[],
             # Remove MCP servers from agent initialization - will be handled per-request
             # mcp_servers=[self.supabase_mcp_server],
@@ -188,6 +204,9 @@ class OrchestratorAgent(Agent):
             return await self._create_smart_cua_task(task_description, {})
 
         self.tools.append(_create_smart_cua_task_tool)
+        
+        # Add strategic direction tool for human guidance
+        self.tools.append(request_strategic_direction)
         
     async def _on_cua_handoff(self, ctx: RunContextWrapper[Any], task: CuaTask) -> None:
         """Handle handoff to ComputerUseAgent with CuaTask data.

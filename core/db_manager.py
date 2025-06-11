@@ -93,10 +93,19 @@ def initialize_database(conn: sqlite3.Connection) -> None:
                 data_for_review TEXT,
                 status TEXT NOT NULL DEFAULT 'pending_review',
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                reviewed_at TEXT
+                reviewed_at TEXT,
+                reviewer_notes TEXT
             )
             """
         )
+        
+        # Add reviewer_notes column if it doesn't exist (for existing databases)
+        try:
+            cursor.execute("ALTER TABLE human_review_queue ADD COLUMN reviewer_notes TEXT")
+        except sqlite3.OperationalError:
+            # Column already exists or other error - ignore
+            pass
+        
         conn.commit()
     except sqlite3.Error as e:
         logger.error("Failed to initialize database schema: %s", e)
@@ -304,18 +313,24 @@ def get_approved_reply_tasks() -> list[dict[str, Any]]:
     finally:
         conn.close()
 
-def update_human_review_status(review_id: int, new_status: str) -> None:
-    """Update the status of a human review task and set reviewed_at timestamp."""
+def update_human_review_status(review_id: int, new_status: str, reviewer_notes: str = None) -> None:
+    """Update the status of a human review task and set reviewed_at timestamp.
+    
+    Args:
+        review_id: The ID of the review to update.
+        new_status: The new status to set.
+        reviewer_notes: Optional notes from the reviewer.
+    """
     conn = get_db_connection()
     try:
         with conn:
             conn.execute(
                 """
                 UPDATE human_review_queue
-                SET status = ?, reviewed_at = CURRENT_TIMESTAMP
+                SET status = ?, reviewed_at = CURRENT_TIMESTAMP, reviewer_notes = ?
                 WHERE review_id = ?
                 """,
-                (new_status, review_id),
+                (new_status, reviewer_notes, review_id),
             )
     except sqlite3.Error as e:
         logger.error("Failed to update human review status for review_id %s: %s", review_id, e)

@@ -16,6 +16,12 @@ class DraftedReplyData(BaseModel):
     original_mention_id: str
     status: str
 
+# Define Pydantic model for strategic direction request
+class StrategicDirectionData(BaseModel):
+    situation_analysis: str
+    proposed_actions: list[str]
+    uncertainty_reason: str
+
 def _request_human_review_impl(
     task_type: str, data_for_review: DraftedReplyData, reason: str
 ) -> Dict[str, Any]:
@@ -65,3 +71,59 @@ def request_human_review(
         Exception: If saving the review request to the database fails.
     """
     return _request_human_review_impl(task_type, data_for_review, reason)
+
+
+def _request_strategic_direction_impl(
+    situation_analysis: str, proposed_actions: list[str], uncertainty_reason: str
+) -> Dict[str, Any]:
+    """Request strategic direction from human by creating an entry in the human_review_queue.
+
+    Args:
+        situation_analysis: The agent's analysis of the current situation.
+        proposed_actions: List of potential actions the agent is considering.
+        uncertainty_reason: Why the agent is uncertain about which action to take.
+
+    Returns:
+        A dict with the review status and review request ID.
+
+    Raises:
+        Exception: If saving the strategic direction request to the database fails.
+    """
+    logger.info("Requesting strategic direction: %s", uncertainty_reason)
+    try:
+        strategic_data = StrategicDirectionData(
+            situation_analysis=situation_analysis,
+            proposed_actions=proposed_actions,
+            uncertainty_reason=uncertainty_reason
+        )
+        payload_json = strategic_data.model_dump_json()
+        review_id = save_human_review_item(
+            task_type="strategic_direction",
+            data_payload_json=payload_json,
+            reason_for_review=uncertainty_reason,
+            initial_status="pending_direction",
+        )
+        return {"status": "pending_strategic_direction", "review_request_id": review_id}
+    except Exception as e:
+        logger.error("Failed to request strategic direction: %s", e)
+        raise
+
+
+@function_tool
+def request_strategic_direction(
+    situation_analysis: str, proposed_actions: list[str], uncertainty_reason: str
+) -> Dict[str, Any]:
+    """Request strategic direction from human when agent is uncertain about next action.
+
+    Args:
+        situation_analysis: The agent's analysis of the current situation.
+        proposed_actions: List of potential actions the agent is considering (2-3 options).
+        uncertainty_reason: Why the agent is uncertain about which action to take.
+
+    Returns:
+        A dict with the review status and review request ID.
+
+    Raises:
+        Exception: If saving the strategic direction request to the database fails.
+    """
+    return _request_strategic_direction_impl(situation_analysis, proposed_actions, uncertainty_reason)

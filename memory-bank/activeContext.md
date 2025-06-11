@@ -78,6 +78,49 @@ Multi-dimensional analysis of agent performance:
 
 ### ✅ Task 10.4: CUA Handoff Workflow Testing - COMPLETED
 
+### ✅ Task 11.1 & 11.2: Education and Evaluation Framework - COMPLETED
+
+**Education Achievement**: Enhanced the OrchestratorAgent's "worldview" with comprehensive memory schema understanding.
+
+#### **Memory Schema Integration**
+*   **Database Schema Documentation**: Added explicit Supabase memory schema to agent instructions
+*   **Table Definitions**: Detailed `agent_actions`, `content_ideas`, `tweet_performance`, and `user_interactions` tables
+*   **Strategic Tool Mapping**: Enhanced Action Menu with specific memory tool references
+*   **Refined Strategic Rules**: Updated MEMORY FIRST rule to explicitly reference `agent_actions` table queries
+
+#### **Spam Prevention Evaluation Framework**
+*   **Evaluation Infrastructure**: Replaced main.py test logic with "The Spam Prevention Eval"
+*   **Autonomous Decision Testing**: Agent receives conflicting engagement directive with pre-logged memory
+*   **Decision Quality Assessment**: Multi-dimensional analysis of agent's spam prevention behavior
+*   **Memory Integration Validation**: Confirms agent uses `check_recent_actions` before engagement
+*   **Strategic Reasoning Analysis**: Evaluates agent's decision-making process and output quality
+
+### ✅ Task 11.3: Strategic Intervention HIL Mechanism - COMPLETED
+
+**Guidance Achievement**: Implemented comprehensive human guidance system for strategic decision-making uncertainty.
+
+#### **Enhanced HIL Infrastructure**
+*   **Strategic Direction Tool**: `request_strategic_direction` function for agent uncertainty handling
+*   **StrategicDirectionData Model**: Pydantic model for situation analysis, proposed actions, and uncertainty reasons
+*   **Database Integration**: HIL queue support for `strategic_direction` task type with `pending_direction` status
+*   **Agent Tool Integration**: Added `request_strategic_direction` to OrchestratorAgent tools list
+
+#### **Human Guidance Interface**
+*   **Strategic Direction Script**: `scripts/provide_strategic_direction.py` for human operator guidance
+*   **Pending Request Listing**: Automatic display of all pending strategic direction requests
+*   **Contextual Request Display**: Shows agent's situation analysis, proposed actions, and uncertainty
+*   **Direction Provision**: Updates HIL queue with human guidance and sets `direction_provided` status
+
+#### **Enhanced Agent Instructions**
+*   **ASK FOR HELP Rule**: New strategic rule for requesting human guidance during uncertainty
+*   **Guidance Protocol**: Agent instructed to provide situation analysis and 2-3 proposed actions
+*   **Human Operator Integration**: Framework for strategic intervention without stopping autonomous operation
+
+#### **Production-Ready Guidance Workflow**
+*   **Real-time Intervention**: Human operators can guide agent decisions during live testing
+*   **Non-blocking Operation**: Agent continues autonomous operation after receiving guidance
+*   **Strategic Context**: Full situational awareness provided to human operators for informed decisions
+
 **Final Validation Achievement**: Successfully validated the new CUA handoff mechanism that consolidates all browser automation into a single, clean interface.
 
 #### **Handoff Mechanism Validation Results**
