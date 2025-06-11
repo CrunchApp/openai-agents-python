@@ -44,6 +44,9 @@ class ComputerUseAgent(Agent):
     async def execute_cua_task(self, task: CuaTask) -> str:
         """Execute a structured CUA task using the centralized workflow runner.
         
+        This method creates a single-use CUA session for backward compatibility.
+        For persistent sessions, use CuaSessionManager directly.
+        
         Args:
             task: The CuaTask object containing prompt, start_url, and configuration
             
@@ -53,8 +56,13 @@ class ComputerUseAgent(Agent):
         self.logger.info(f"ComputerUseAgent executing structured task: {task.prompt[:100]}...")
         
         try:
-            runner = CuaWorkflowRunner()
-            result = await runner.run_workflow(task)
+            # Import here to avoid circular dependency
+            from core.cua_session_manager import CuaSessionManager
+            
+            # Use session manager for proper lifecycle management
+            async with CuaSessionManager() as session:
+                result = await session.run_task(task)
+                
             self.logger.info(f"CUA task completed with result: {result[:200]}...")
             return result
         except Exception as e:

@@ -4,14 +4,46 @@ import asyncio
 import logging
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from dataclasses import dataclass
 
 from agents import (
     Agent,  # Import Agent from SDK
     Runner,
 )
 from project_agents.orchestrator_agent import OrchestratorAgent
+from core.cua_session_manager import CuaSessionManager
 
 logger = logging.getLogger(__name__)
+
+@dataclass
+class AppContext:
+    """Application context containing the persistent CUA session."""
+    cua_session: CuaSessionManager
+
+async def _run_cycle_with_session() -> None:
+    """Run the autonomous cycle with a persistent CUA session."""
+    logger.info("Starting autonomous cycle with persistent CUA session...")
+    
+    try:
+        async with CuaSessionManager() as cua_session:
+            logger.info("CUA session established, initializing orchestrator...")
+            
+            # Create the application context with the live session
+            context = AppContext(cua_session=cua_session)
+            
+            # Create orchestrator agent
+            orchestrator = OrchestratorAgent()
+            
+            # Run the orchestrator with the context containing the persistent session
+            await Runner.run(
+                orchestrator, 
+                input="New action cycle: Assess the situation and choose a strategic action based on your goals.",
+                context=context
+            )
+            
+            logger.info("Autonomous cycle completed successfully with persistent CUA session")
+    except Exception as e:
+        logger.error(f"Error in autonomous cycle with CUA session: {e}", exc_info=True)
 
 def run_mention_processing_job() -> None:
     """Run mention processing workflow via Runner."""
@@ -31,14 +63,13 @@ def run_approved_replies_job() -> None:
 
 
 def run_autonomous_cycle_job() -> None:
-    """Runs the Orchestrator's main autonomous decision-making cycle."""
-    logger.info("Scheduler triggering autonomous action cycle for OrchestratorAgent...")
-    orchestrator = OrchestratorAgent()
+    """Runs the Orchestrator's main autonomous decision-making cycle with persistent CUA session."""
+    logger.info("Scheduler triggering autonomous action cycle with persistent CUA session...")
     try:
-        # The input prompt is high-level, triggering the agent to use its new instructions.
-        asyncio.run(Runner.run(orchestrator, input="New action cycle: Assess the situation and choose a strategic action based on your goals."))
+        # Run the new async function with CUA session management
+        asyncio.run(_run_cycle_with_session())
     except Exception as e:
-        logger.error("Error running autonomous orchestrator cycle: %s", e)
+        logger.error("Error running autonomous orchestrator cycle with CUA session: %s", e)
 
 class SchedulingAgent(Agent):
     """Agent responsible for scheduling the OrchestratorAgent workflows."""

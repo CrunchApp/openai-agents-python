@@ -38,7 +38,7 @@ Before executing **any** request from other team members—including but not lim
 ## SDK Development & Abstraction Guidance
 
 *   **You are working within an SDK repository.** This means the codebase contains numerous abstractions, interfaces, and base classes designed for extension.
-*   **The `examples/` directory is your primary resource for inspiration and clarification.** When you are not confident about a solution, need to understand how a core abstraction is implemented, or are seeking established patterns for building a new agentic unit, you **MUST** first review the relevant files within the `examples/` directory.
+*   **The `examples/` directory is your primary resource for inspiration and clarification.** When you are not confident about a solution, need to understand how a core abstraction is implemented, or are seeking established patterns for building a new agentic unit, you **MUST** first review and consult the relevant files within the `examples/` directory.
 *   These examples provide concrete implementations and are your guide to using the SDK's components correctly. Rely on them heavily to inform your development process and ensure your work aligns with the SDK's intended design.
 
 ## Contradiction & Deviation Protocol

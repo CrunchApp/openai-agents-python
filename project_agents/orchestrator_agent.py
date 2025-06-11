@@ -3,9 +3,10 @@
 import asyncio
 import json
 import logging
-from typing import Any
+from typing import Any, TYPE_CHECKING
+from dataclasses import dataclass
 
-from agents import Agent, RunContextWrapper, function_tool, Runner, handoff
+from agents import Agent, RunContextWrapper, function_tool, Runner
 from agents.mcp.server import MCPServerStdio
 from core.config import settings
 from core.models import CuaTask
@@ -21,7 +22,6 @@ from core.oauth_manager import OAuthError
 from project_agents.content_creation_agent import ContentCreationAgent
 from project_agents.research_agent import ResearchAgent
 from project_agents.x_interaction_agent import XInteractionAgent
-from project_agents.computer_use_agent import ComputerUseAgent
 from tools.human_handoff_tool import _request_human_review_impl as call_request_human_review, DraftedReplyData, request_strategic_direction
 from tools.x_api_tools import XApiError, get_mentions, post_text_tweet as _post_text_tweet
 from tools.memory_tools import (
@@ -34,8 +34,16 @@ from tools.memory_tools import (
 )
 from pydantic import ValidationError
 
+if TYPE_CHECKING:
+    from core.cua_session_manager import CuaSessionManager
 
-class OrchestratorAgent(Agent):
+@dataclass
+class AppContext:
+    """Application context containing the persistent CUA session."""
+    cua_session: 'CuaSessionManager'
+
+
+class OrchestratorAgent(Agent[AppContext]):
     """Central coordinator agent for managing X platform interactions."""
 
     def __init__(self) -> None:
@@ -44,7 +52,6 @@ class OrchestratorAgent(Agent):
         self.content_creation_agent = ContentCreationAgent()
         self.research_agent = ResearchAgent()
         self.x_interaction_agent = XInteractionAgent()
-        self.computer_use_agent = ComputerUseAgent()
 
         # Initialize the Supabase MCP Server configuration (connection will be managed per-request)
         self.supabase_mcp_server = MCPServerStdio(
@@ -67,15 +74,6 @@ class OrchestratorAgent(Agent):
 
         super().__init__(
             name="Orchestrator Agent",
-            handoffs=[
-                handoff(
-                    agent=self.computer_use_agent,
-                    tool_name_override="execute_cua_task",
-                    input_type=CuaTask,
-                    on_handoff=self._on_cua_handoff,
-                    tool_description_override="Delegates a specific browser automation task to the ComputerUseAgent. Use this for all UI interactions like posting, liking, replying, timeline reading, search, etc. Provide a structured CuaTask with prompt, optional start_url, and max_iterations."
-                )
-            ],
             instructions=(
                 "You are 'AIified', a sophisticated AI agent managing an X.com account. Your primary objective is to autonomously grow the account by maximizing meaningful engagement within the AI, LLM, and Machine Learning communities. You must be professional, insightful, and helpful.\n\n"
                 
@@ -97,10 +95,10 @@ class OrchestratorAgent(Agent):
                 
                 "--- ACTION MENU ---\n"
                 "1. **Content Research & Curation:** Use the `enhanced_research_with_memory` tool to find new, interesting topics. This is a good default action if you have no other high-priority tasks. Query ideas: 'latest breakthroughs in generative AI', 'new open source LLMs', 'AI ethics discussions'.\n"
-                "2. **Post New Content:** Use the `get_unused_content_ideas` tool to query the `content_ideas` table for items with status 'new'. If you find a promising idea, use the ContentCreationAgent (internally) to draft a tweet, send it for HIL review, and if approved, use the `execute_cua_task` tool to post it.\n"
-                "3. **Engage with Timeline:** Use the `execute_cua_task` tool to read your home timeline and find relevant tweets. Use the `enhanced_like_tweet_with_memory` tool to engage with high-quality tweets with memory-driven spam prevention.\n"
+                "2. **Post New Content:** Use the `get_unused_content_ideas` tool to query the `content_ideas` table for items with status 'new'. If you find a promising idea, use the ContentCreationAgent (internally) to draft a tweet, send it for HIL review, and if approved, use the `execute_cua_task_direct` tool to post it.\n"
+                "3. **Engage with Timeline:** Use the `read_timeline_with_session` tool to read your home timeline and find relevant tweets. Use the `enhanced_like_tweet_with_memory` tool to engage with high-quality tweets with memory-driven spam prevention.\n"
                 "4. **Check for Mentions & High-Value Replies:** Check your own mentions for opportunities to engage using the `process_new_mentions` tool.\n"
-                "5. **Expand Network:** Use the `execute_cua_task` tool to search X for active conversations. Based on the results, you can decide to follow insightful users or engage with relevant public tweets.\n\n"
+                "5. **Expand Network:** Use the `search_and_engage_with_session` tool to search X for active conversations. Based on the results, you can decide to follow insightful users or engage with relevant public tweets.\n\n"
                 
                 "--- STRATEGIC RULES ---\n"
                 "- **MEMORY FIRST:** Before taking any engagement action (like, reply, follow), you MUST use the `check_recent_actions` tool to query the `agent_actions` table and ensure you haven't interacted with that same tweet or user recently. This prevents spammy behavior.\n"
@@ -108,7 +106,7 @@ class OrchestratorAgent(Agent):
                 "- **BE CONCISE:** When using tools, provide clear and concise inputs. For example, for `enhanced_research_with_memory`, provide a specific query like 'What is retrieval-augmented generation?'.\n"
                 "- **DOCUMENTATION:** After every major action, think about what should be logged to your memory for future reference.\n"
                 "- **ASK FOR HELP:** If you are unsure which action to take, or if all available actions seem equally valuable, use the `request_strategic_direction` tool. Provide your analysis of the situation and your top 2-3 proposed actions. A human operator will then provide guidance.\n"
-                "- **CUA TASKS:** For browser automation tasks, use the `execute_cua_task` tool with appropriate CuaTask parameters including prompt, start_url (optional), and max_iterations."
+                "- **CUA TASKS:** You have direct access to a persistent browser session. Use tools like `execute_cua_task_direct`, `read_timeline_with_session`, and `search_and_engage_with_session` for browser automation within your persistent session."
             ),
             model=ORCHESTRATOR_MODEL,
             tools=[],
@@ -121,7 +119,7 @@ class OrchestratorAgent(Agent):
             name_override="process_new_mentions",
             description_override="Process new X mentions: fetch mentions, draft replies, request human review, and update state",
         )
-        async def _process_new_mentions_tool(ctx: RunContextWrapper[Any]) -> None:
+        async def _process_new_mentions_tool(ctx: RunContextWrapper[AppContext]) -> None:
             """Tool wrapper for process_new_mentions_workflow."""
             await self.process_new_mentions_workflow()
 
@@ -132,7 +130,7 @@ class OrchestratorAgent(Agent):
             name_override="process_approved_replies",
             description_override="Process approved human-reviewed replies: post approved replies and update review status",
         )
-        async def _process_approved_replies_tool(ctx: RunContextWrapper[Any]) -> None:
+        async def _process_approved_replies_tool(ctx: RunContextWrapper[AppContext]) -> None:
             """Tool wrapper for process_approved_replies_workflow."""
             await self.process_approved_replies_workflow()
 
@@ -149,14 +147,34 @@ class OrchestratorAgent(Agent):
         # Add memory-driven decision tools
         @function_tool(
             name_override="enhanced_like_tweet_with_memory",
-            description_override="Like a tweet with memory-driven spam prevention. Checks recent interactions to avoid overengaging with the same target. Returns a CuaTask for execution.",
+            description_override="Like a tweet with memory-driven spam prevention. Checks recent interactions to avoid overengaging with the same target. Executes directly using persistent CUA session.",
         )
-        async def _enhanced_like_tweet_with_memory_tool(ctx: RunContextWrapper[Any], tweet_url: str) -> str:
+        async def _enhanced_like_tweet_with_memory_tool(ctx: RunContextWrapper[AppContext], tweet_url: str) -> str:
             """Tool wrapper for enhanced tweet liking with memory."""
             task = await self._enhanced_like_tweet_with_memory(tweet_url)
             if isinstance(task, CuaTask):
-                # Task is ready for handoff - convert to instructions for LLM
-                return f"Memory check passed. Ready to execute CUA task: Use execute_cua_task with prompt='{task.prompt}', start_url='{task.start_url}', max_iterations={task.max_iterations}"
+                # Execute the task directly using the persistent session
+                try:
+                    result = await ctx.context.cua_session.run_task(task)
+                    
+                    # Log the successful action to memory
+                    await self._log_action_to_memory(
+                        action_type='like_tweet_executed',
+                        result='SUCCESS',
+                        target=tweet_url,
+                        details={'cua_result': result[:200]}
+                    )
+                    
+                    return f"✅ Successfully liked tweet: {result}"
+                except Exception as e:
+                    # Log the failed action to memory
+                    await self._log_action_to_memory(
+                        action_type='like_tweet_failed',
+                        result='FAILED',
+                        target=tweet_url,
+                        details={'error': str(e)}
+                    )
+                    return f"❌ Failed to like tweet: {e}"
             else:
                 # Task was skipped due to memory check
                 return str(task)
@@ -165,7 +183,7 @@ class OrchestratorAgent(Agent):
             name_override="enhanced_research_with_memory",
             description_override="Research topics with automatic content idea saving to memory. Extracts and stores potential content ideas for future use.",
         )
-        async def _enhanced_research_with_memory_tool(ctx: RunContextWrapper[Any], query: str) -> str:
+        async def _enhanced_research_with_memory_tool(ctx: RunContextWrapper[AppContext], query: str) -> str:
             """Tool wrapper for enhanced research with memory."""
             return await self._enhanced_research_with_memory(query)
 
@@ -173,7 +191,7 @@ class OrchestratorAgent(Agent):
             name_override="get_unused_content_ideas",
             description_override="Retrieve unused content ideas from strategic memory for posting. Can filter by topic category.",
         )
-        async def _get_unused_content_ideas_tool(ctx: RunContextWrapper[Any], topic_category: str = None, limit: int = 10) -> str:
+        async def _get_unused_content_ideas_tool(ctx: RunContextWrapper[AppContext], topic_category: str = None, limit: int = 10) -> str:
             """Tool wrapper for retrieving unused content ideas."""
             result = await self._get_unused_content_ideas_from_memory(topic_category, limit)
             return json.dumps(result, indent=2)
@@ -182,60 +200,144 @@ class OrchestratorAgent(Agent):
             name_override="check_recent_actions",
             description_override="Check recent agent actions to avoid duplication and make strategic decisions based on history.",
         )
-        async def _check_recent_actions_tool(ctx: RunContextWrapper[Any], action_type: str = None, hours_back: int = 24) -> str:
+        async def _check_recent_actions_tool(ctx: RunContextWrapper[AppContext], action_type: str = None, hours_back: int = 24) -> str:
             """Tool wrapper for checking recent actions."""
             result = await self._retrieve_recent_actions_from_memory(action_type, hours_back)
             return json.dumps(result, indent=2)
 
+        # Add direct CUA execution tools using persistent session
+        @function_tool(
+            name_override="execute_cua_task_direct",
+            description_override="Execute a CUA task directly using the persistent browser session. Provide a clear task description and it will be converted to an optimized CUA workflow.",
+        )
+        async def _execute_cua_task_direct_tool(ctx: RunContextWrapper[AppContext], task_description: str) -> str:
+            """Tool wrapper for direct CUA task execution using persistent session."""
+            try:
+                # Create smart task from description
+                from core.cua_instructions import create_smart_cua_task_prompt
+                prompt, start_url, max_iterations = create_smart_cua_task_prompt(task_description, {})
+                
+                # Create CUA task
+                task = CuaTask(
+                    prompt=prompt,
+                    start_url=start_url,
+                    max_iterations=max_iterations
+                )
+                
+                # Execute using persistent session
+                result = await ctx.context.cua_session.run_task(task)
+                
+                # Log the action
+                await self._log_action_to_memory(
+                    action_type='cua_task_executed',
+                    result='SUCCESS' if 'SUCCESS' in result else 'COMPLETED',
+                    target=task_description,
+                    details={
+                        'prompt': prompt[:100],
+                        'start_url': start_url,
+                        'max_iterations': max_iterations,
+                        'result': result[:200]
+                    }
+                )
+                
+                return f"✅ CUA task completed: {result}"
+                
+            except Exception as e:
+                await self._log_action_to_memory(
+                    action_type='cua_task_failed',
+                    result='FAILED',
+                    target=task_description,
+                    details={'error': str(e)}
+                )
+                return f"❌ CUA task failed: {e}"
+
+        @function_tool(
+            name_override="read_timeline_with_session",
+            description_override="Read tweets from the home timeline using the persistent browser session. Specify number of tweets to read (default: 5).",
+        )
+        async def _read_timeline_with_session_tool(ctx: RunContextWrapper[AppContext], num_tweets: int = 5) -> str:
+            """Tool wrapper for reading timeline using persistent session."""
+            try:
+                from core.cua_instructions import get_timeline_reading_prompt
+                prompt = get_timeline_reading_prompt(num_tweets)
+                
+                task = CuaTask(
+                    prompt=prompt,
+                    start_url="https://x.com",
+                    max_iterations=30
+                )
+                
+                result = await ctx.context.cua_session.run_task(task)
+                
+                # Log the action
+                await self._log_action_to_memory(
+                    action_type='timeline_read',
+                    result='SUCCESS' if 'SUCCESS' in result else 'COMPLETED',
+                    target=f"read_{num_tweets}_tweets",
+                    details={'num_tweets': num_tweets, 'result': result[:200]}
+                )
+                
+                return f"📱 Timeline reading completed: {result}"
+                
+            except Exception as e:
+                await self._log_action_to_memory(
+                    action_type='timeline_read_failed',
+                    result='FAILED',
+                    target=f"read_{num_tweets}_tweets",
+                    details={'error': str(e)}
+                )
+                return f"❌ Timeline reading failed: {e}"
+
+        @function_tool(
+            name_override="search_and_engage_with_session",
+            description_override="Search X for topics and engage with relevant content using the persistent browser session. Provide a search query.",
+        )
+        async def _search_and_engage_with_session_tool(ctx: RunContextWrapper[AppContext], search_query: str) -> str:
+            """Tool wrapper for searching and engaging using persistent session."""
+            try:
+                from core.cua_instructions import get_search_and_like_tweet_prompt
+                prompt = get_search_and_like_tweet_prompt(search_query, max_iterations=25)
+                
+                task = CuaTask(
+                    prompt=prompt,
+                    start_url="https://x.com",
+                    max_iterations=25
+                )
+                
+                result = await ctx.context.cua_session.run_task(task)
+                
+                # Log the action
+                await self._log_action_to_memory(
+                    action_type='search_and_engage',
+                    result='SUCCESS' if 'SUCCESS' in result else 'COMPLETED',
+                    target=search_query,
+                    details={'search_query': search_query, 'result': result[:200]}
+                )
+                
+                return f"🔍 Search and engage completed: {result}"
+                
+            except Exception as e:
+                await self._log_action_to_memory(
+                    action_type='search_and_engage_failed',
+                    result='FAILED',
+                    target=search_query,
+                    details={'error': str(e)}
+                )
+                return f"❌ Search and engage failed: {e}"
+
+        # Add all the newly defined tools to the agent
         self.tools.extend([
             _enhanced_like_tweet_with_memory_tool,
             _enhanced_research_with_memory_tool,
             _get_unused_content_ideas_tool,
             _check_recent_actions_tool,
+            _execute_cua_task_direct_tool,
+            _read_timeline_with_session_tool,
+            _search_and_engage_with_session_tool,
         ])
 
-        # Add smart CUA task creation tool
-        @function_tool(
-            name_override="create_smart_cua_task",
-            description_override="Create an intelligently structured CUA task with optimized prompts and parameters. Automatically analyzes task description and generates appropriate step-by-step instructions for the ComputerUseAgent.",
-        )
-        async def _create_smart_cua_task_tool(ctx: RunContextWrapper[Any], task_description: str) -> str:
-            """Tool wrapper for smart CUA task creation."""
-            return await self._create_smart_cua_task(task_description, {})
-
-        self.tools.append(_create_smart_cua_task_tool)
-        
         # Add strategic direction tool for human guidance
         self.tools.append(request_strategic_direction)
-        
-    async def _on_cua_handoff(self, ctx: RunContextWrapper[Any], task: CuaTask) -> None:
-        """Handle handoff to ComputerUseAgent with CuaTask data.
-        
-        This callback is executed when the LLM calls the execute_cua_task handoff.
-        It prepares the context and instructions for the ComputerUseAgent.
-        
-        Args:
-            ctx: The run context wrapper
-            task: The validated CuaTask object from the LLM
-        """
-        self.logger.info(f"CUA handoff received: {task.prompt[:100]}...")
-        
-        # Store the task directly in the context - the ComputerUseAgent
-        # will handle execution through its execute_cua_task tool
-        ctx.cua_task = task
-        
-        # Create a clear instruction for the ComputerUseAgent
-        instruction = f"""EXECUTE CUA TASK:
-
-Task Summary: {task.prompt[:200]}{'...' if len(task.prompt) > 200 else ''}
-
-The task details are provided as a CuaTask object. Use your execute_cua_task tool to process this structured task."""
-        
-        ctx.cua_instruction = instruction.strip()
-        
-        # Log the handoff details
-        self.logger.info(f"CUA task handoff - Max iterations: {task.max_iterations}, Start URL: {task.start_url}")
-        self.logger.info("Handoff callback completed - ComputerUseAgent will execute the task")
 
     def run_simple_post_workflow(self, content: str) -> None:
         """Run a simple workflow that posts content to X via direct tool call."""
